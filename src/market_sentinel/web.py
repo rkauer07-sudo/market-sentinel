@@ -120,6 +120,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if os.getenv("AUTOSTART", "false").lower() in {"1", "true", "yes", "on"}:
+            dashboard.start()
         yield
         await dashboard.stop(); await dashboard.sentinel.close()
 

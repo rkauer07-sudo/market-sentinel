@@ -20,8 +20,9 @@ services:
         sync: false
       - key: LOG_LEVEL
         value: INFO
+      - key: AUTOSTART
+        value: "true"
     disk:
       name: sentinel-data
       mountPath: /var/data
       sizeGB: 1
-
