@@ -31,3 +31,6 @@ market_sentinel = ["static/*.html"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+
+[tool.vercel]
+entrypoint = "api/index.py"
