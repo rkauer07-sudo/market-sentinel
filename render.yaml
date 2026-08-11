@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: market-sentinel
+    runtime: docker
+    plan: starter
+    region: ohio
+    autoDeployTrigger: commit
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: DATABASE_PATH
+        value: /var/data/sentinel.db
+      - key: DASHBOARD_USER
+        value: admin
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+    disk:
+      name: sentinel-data
+      mountPath: /var/data
+      sizeGB: 1
+

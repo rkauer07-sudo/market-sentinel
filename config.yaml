@@ -1,0 +1,37 @@
+core_assets:
+  - BTC
+  - ETH
+  - SOL
+  - HYPE
+  - ZEC
+  - BNB
+  - NEAR
+  - SUI
+  - JUP
+  - UNI
+  - AVAX
+  - ZRO
+  - LINK
+
+timeframes: [1h, 4h, 1d]
+analysis:
+  min_candles: 210
+  min_risk_reward: 2.0
+  min_score: 75
+  strong_score: 85
+  min_confirmations: 5
+  potential_zone_atr: 0.65
+  min_daily_quote_volume: 500000
+  max_spread_pct: 0.30
+  pivot_window: 3
+  zone_tolerance_atr: 0.35
+  alert_cooldown_hours: 12
+  expiry_bars:
+    1h: 24
+    4h: 12
+    1d: 5
+runtime:
+  scan_interval_seconds: 300
+  market_refresh_hours: 6
+  max_concurrency: 8
+  database_path: data/sentinel.db
