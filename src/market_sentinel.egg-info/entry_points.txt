@@ -1,0 +1,3 @@
+[console_scripts]
+market-sentinel = market_sentinel.cli:main
+market-sentinel-web = market_sentinel.web:main

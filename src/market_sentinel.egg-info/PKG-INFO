@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: market-sentinel
+Version: 0.1.0
+Summary: Read-only 24/7 crypto and tokenized-RWA opportunity monitor
+Requires-Python: >=3.11
+Requires-Dist: httpx<1,>=0.27
+Requires-Dist: PyYAML<7,>=6
+Requires-Dist: python-dotenv<2,>=1
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: uvicorn[standard]<1,>=0.30
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8; extra == "dev"
+Requires-Dist: pytest-asyncio<1,>=0.24; extra == "dev"
