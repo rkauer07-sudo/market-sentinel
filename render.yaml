@@ -6,7 +6,6 @@ services:
     region: ohio
     autoDeployTrigger: commit
     healthCheckPath: /health
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: DATABASE_PATH
         value: /var/data/sentinel.db
