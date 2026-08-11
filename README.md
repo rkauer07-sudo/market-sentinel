@@ -93,6 +93,23 @@ desativada para facilitar desenvolvimento.
 
 ## Controles relevantes
 
+## Modo gratuito: Vercel + GitHub Actions + Supabase Storage
+
+O workflow `.github/workflows/scan.yml` executa uma varredura a cada cinco minutos. O banco SQLite
+é baixado e reenviado para um bucket privado do Supabase, permitindo que execuções independentes
+preservem sinais, eventos, cooldowns e cenários.
+
+1. Crie um projeto gratuito no Supabase e um bucket privado chamado `sentinel` em Storage.
+2. No GitHub, em **Settings > Secrets and variables > Actions**, crie os secrets
+   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`.
+3. Na Vercel, adicione `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `SUPABASE_STORAGE_BUCKET=sentinel` e `SUPABASE_DB_OBJECT=sentinel.db`.
+4. Envie `.github/workflows/scan.yml` e o restante das alterações para a branch `main`.
+5. Em **GitHub > Actions > Market scan**, execute **Run workflow** uma vez para criar o banco.
+
+Nunca coloque a service role key em arquivos versionados ou no JavaScript do navegador. Ela deve
+existir somente nos secrets do GitHub e nas variáveis protegidas da função Vercel.
+
 Edite `config.yaml` para alterar intervalo de varredura, timeframes, score, liquidez e cooldown. O sistema:
 
 - ignora candles ainda abertos;

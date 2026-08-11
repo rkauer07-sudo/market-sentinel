@@ -133,6 +133,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
+        if request.url.path.startswith("/api/"):
+            await asyncio.to_thread(dashboard.sentinel.store.sync_from_remote)
         if request.url.path == "/health" or not (auth_user and auth_password):
             return await call_next(request)
         header = request.headers.get("Authorization", "")
@@ -159,10 +161,12 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         for _, market in dashboard.sentinel.markets:
             classes[market.asset_class.value] = classes.get(market.asset_class.value, 0) + 1
         lifecycle = dashboard.sentinel.store.signal_stats()
+        scheduled = bool(dashboard.sentinel.store.remote_url and dashboard.sentinel.store.remote_key)
         return {"running": dashboard.running, "scanning": dashboard.scan_lock.locked(),
+                "scheduled": scheduled, "last_scan_at": dashboard.sentinel.store.snapshot_updated_at(),
                 "telegram": dashboard.sentinel.notifier.configured, "market_count": len(dashboard.sentinel.markets),
                 "classes": classes, "opportunity_count": len(dashboard.last_opportunities),
-                "candidate_count": len(dashboard.sentinel.last_candidates),
+                "candidate_count": len(dashboard.sentinel.store.candidates()),
                 "last_error": dashboard.last_error,
                 "interval_seconds": dashboard.settings.runtime["scan_interval_seconds"],
                 "lifecycle": lifecycle}
@@ -182,7 +186,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     async def opportunities(): return dashboard.sentinel.store.signals("ACTIVE")
 
     @app.get("/api/candidates")
-    async def candidates(): return [serialize_candidate(x) for x in dashboard.sentinel.last_candidates]
+    async def candidates(): return dashboard.sentinel.store.candidates()
 
     @app.get("/api/live-prices")
     async def live_prices():
@@ -191,7 +195,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             return dashboard.price_cache
         active = dashboard.sentinel.store.signals("ACTIVE", 200)
         wanted = {(x["venue"], x["symbol"]) for x in active}
-        wanted.update((x.market.venue, x.market.symbol) for x in dashboard.sentinel.last_candidates)
+        wanted.update((x["venue"], x["symbol"]) for x in dashboard.sentinel.store.candidates())
+        if wanted and not dashboard.sentinel.markets:
+            await dashboard.sentinel.refresh_markets()
         matches = [(adapter, market) for adapter, market in dashboard.sentinel.markets
                    if (market.venue, market.symbol) in wanted]
         semaphore = asyncio.Semaphore(10)

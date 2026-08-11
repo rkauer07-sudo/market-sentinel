@@ -1,14 +1,26 @@
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
+import httpx
 from .models import Opportunity
 
 
 class Store:
     def __init__(self, path: str):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path)
+        self.remote_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+        self.remote_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        self.remote_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "sentinel")
+        self.remote_object = os.getenv("SUPABASE_DB_OBJECT", "sentinel.db")
+        self.upload_remote = os.getenv("SYNC_DB_UPLOAD", "false").lower() in {"1", "true", "yes"}
+        self.path = Path(path)
+        if self.remote_url and self.remote_key:
+            self.path = Path(os.getenv("SYNC_DB_LOCAL_PATH", "/tmp/market-sentinel.db"))
+            self._download_remote()
+        self.last_remote_sync = time.time()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(self.path)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS alerts (
@@ -35,12 +47,37 @@ class Store:
           created_at INTEGER NOT NULL, event_type TEXT NOT NULL, message TEXT NOT NULL,
           price REAL, FOREIGN KEY(signal_id) REFERENCES signals(id)
         );
+        CREATE TABLE IF NOT EXISTS candidate_snapshots (
+          id INTEGER PRIMARY KEY CHECK (id=1), updated_at INTEGER NOT NULL, payload_json TEXT NOT NULL
+        );
         """)
         self._ensure_column("signals", "reasons_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("signals", "risks_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("signals", "score_breakdown_json", "TEXT NOT NULL DEFAULT '{}'")
         self._ensure_column("signals", "confirmation_count", "INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
+
+    def save_candidates(self, candidates):
+        payload = [{
+            "venue": c.market.venue, "symbol": c.market.symbol,
+            "asset_class": c.market.asset_class.value, "timeframe": c.timeframe,
+            "direction": c.direction, "scenario": c.scenario,
+            "trigger_price": c.trigger_price, "invalidation_price": c.invalidation_price,
+            "target": c.target, "readiness": c.readiness, "conditions": c.conditions,
+            "risks": c.risks, "candle_timestamp": c.candle_timestamp,
+        } for c in candidates]
+        self.db.execute("""INSERT INTO candidate_snapshots(id,updated_at,payload_json) VALUES(1,?,?)
+            ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,payload_json=excluded.payload_json""",
+            (int(time.time()), json.dumps(payload, ensure_ascii=False)))
+        self.db.commit()
+
+    def candidates(self) -> list[dict]:
+        row = self.db.execute("SELECT payload_json FROM candidate_snapshots WHERE id=1").fetchone()
+        return json.loads(row[0]) if row else []
+
+    def snapshot_updated_at(self) -> int | None:
+        row = self.db.execute("SELECT updated_at FROM candidate_snapshots WHERE id=1").fetchone()
+        return row[0] if row else None
 
     def should_send(self, op: Opportunity, cooldown_hours: int) -> bool:
         row = self.db.execute("SELECT sent_at, candle_timestamp FROM alerts WHERE fingerprint=?", (op.fingerprint,)).fetchone()
@@ -179,4 +216,35 @@ class Store:
         if column not in columns:
             self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-    def close(self): self.db.close()
+    def _remote_object_url(self):
+        return f"{self.remote_url}/storage/v1/object/{self.remote_bucket}/{self.remote_object}"
+
+    def _remote_headers(self):
+        return {"Authorization": f"Bearer {self.remote_key}", "apikey": self.remote_key}
+
+    def _download_remote(self):
+        response = httpx.get(self._remote_object_url(), headers=self._remote_headers(), timeout=30)
+        if response.status_code == 404:
+            return
+        response.raise_for_status()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_bytes(response.content)
+
+    def _upload_remote(self):
+        response = httpx.post(self._remote_object_url(), headers={**self._remote_headers(), "x-upsert": "true",
+            "Content-Type": "application/octet-stream"}, content=self.path.read_bytes(), timeout=60)
+        response.raise_for_status()
+
+    def sync_from_remote(self):
+        if not self.remote_url or not self.remote_key or self.upload_remote or time.time() - self.last_remote_sync < 30:
+            return
+        self.db.close()
+        self._download_remote()
+        self.db = sqlite3.connect(self.path)
+        self.last_remote_sync = time.time()
+
+    def close(self):
+        self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        self.db.close()
+        if self.upload_remote and self.remote_url and self.remote_key:
+            self._upload_remote()
