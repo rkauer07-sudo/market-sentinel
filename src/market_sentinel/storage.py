@@ -14,10 +14,14 @@ class Store:
         self.remote_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "sentinel")
         self.remote_object = os.getenv("SUPABASE_DB_OBJECT", "sentinel.db")
         self.upload_remote = os.getenv("SYNC_DB_UPLOAD", "false").lower() in {"1", "true", "yes"}
+        self.remote_error: str | None = None
         self.path = Path(path)
         if self.remote_url and self.remote_key:
             self.path = Path(os.getenv("SYNC_DB_LOCAL_PATH", "/tmp/market-sentinel.db"))
-            self._download_remote()
+            try:
+                self._download_remote()
+            except Exception as exc:
+                self.remote_error = f"{type(exc).__name__}: {exc}"
         self.last_remote_sync = time.time()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path)
@@ -228,7 +232,12 @@ class Store:
             return
         response.raise_for_status()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_bytes(response.content)
+        if not response.content.startswith(b"SQLite format 3"):
+            raise RuntimeError("O objeto baixado do Supabase não é um banco SQLite válido")
+        temporary = self.path.with_suffix(".download")
+        temporary.write_bytes(response.content)
+        temporary.replace(self.path)
+        self.remote_error = None
 
     def _upload_remote(self):
         response = httpx.post(self._remote_object_url(), headers={**self._remote_headers(), "x-upsert": "true",
@@ -239,9 +248,13 @@ class Store:
         if not self.remote_url or not self.remote_key or self.upload_remote or time.time() - self.last_remote_sync < 30:
             return
         self.db.close()
-        self._download_remote()
-        self.db = sqlite3.connect(self.path)
-        self.last_remote_sync = time.time()
+        try:
+            self._download_remote()
+        except Exception as exc:
+            self.remote_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            self.db = sqlite3.connect(self.path)
+            self.last_remote_sync = time.time()
 
     def close(self):
         self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")

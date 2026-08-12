@@ -161,9 +161,11 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         for _, market in dashboard.sentinel.markets:
             classes[market.asset_class.value] = classes.get(market.asset_class.value, 0) + 1
         lifecycle = dashboard.sentinel.store.signal_stats()
-        scheduled = bool(dashboard.sentinel.store.remote_url and dashboard.sentinel.store.remote_key)
+        scheduled = bool(dashboard.sentinel.store.remote_url and dashboard.sentinel.store.remote_key
+                         and not dashboard.sentinel.store.remote_error)
         return {"running": dashboard.running, "scanning": dashboard.scan_lock.locked(),
                 "scheduled": scheduled, "last_scan_at": dashboard.sentinel.store.snapshot_updated_at(),
+                "storage_error": dashboard.sentinel.store.remote_error,
                 "telegram": dashboard.sentinel.notifier.configured, "market_count": len(dashboard.sentinel.markets),
                 "classes": classes, "opportunity_count": len(dashboard.last_opportunities),
                 "candidate_count": len(dashboard.sentinel.store.candidates()),
