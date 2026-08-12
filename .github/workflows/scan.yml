@@ -1,4 +1,3 @@
-
 name: Market scan
 
 on:
@@ -31,6 +30,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          test -n "$SUPABASE_URL" || { echo "SUPABASE_URL não foi configurado"; exit 1; }
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "SUPABASE_SERVICE_ROLE_KEY não foi configurado"; exit 1; }
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -41,3 +46,35 @@ jobs:
 
       - name: Scan closed candles
         run: market-sentinel once
+
+      - name: Verify remote database
+        run: |
+          python - <<'PY'
+          import os
+          import httpx
+
+          key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+          headers = {"apikey": key}
+
+          if not key.startswith("sb_secret_"):
+              headers["Authorization"] = f"Bearer {key}"
+
+          url = (
+              f"{os.environ['SUPABASE_URL'].rstrip('/')}/storage/v1/object/"
+              f"{os.environ['SUPABASE_STORAGE_BUCKET']}/"
+              f"{os.environ['SUPABASE_DB_OBJECT']}"
+          )
+
+          response = httpx.get(url, headers=headers, timeout=30)
+
+          if response.status_code != 200:
+              raise SystemExit(
+                  f"Banco remoto indisponível: HTTP {response.status_code} - "
+                  f"{response.text[:500]}"
+              )
+
+          if not response.content.startswith(b"SQLite format 3"):
+              raise SystemExit("O objeto remoto não é um banco SQLite válido")
+
+          print(f"Banco remoto validado: {len(response.content)} bytes")
+          PY
