@@ -37,3 +37,14 @@ def test_same_candle_stop_and_target_is_conservative(tmp_path):
                Candle(300, 106, 107, 105, 106, 1)]
     assert store.reconcile(op.market, "1h", candles, 24)[0]["status"] == "FAILED"
     store.close()
+
+
+def test_forming_candle_stop_closes_signal_immediately(tmp_path):
+    store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
+    candles = [Candle(100, 100, 102, 99, 101, 1),
+               Candle(200, 101, 103, 100, 102, 1),
+               Candle(300, 102, 103, 94, 96, 1)]  # current/forming candle
+    resolved = store.reconcile(op.market, "1h", candles, 24)
+    assert resolved[0]["status"] == "FAILED"
+    assert store.signals("ACTIVE") == []
+    store.close()

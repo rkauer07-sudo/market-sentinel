@@ -127,7 +127,11 @@ class Store:
         resolutions = []
         for values in rows:
             signal = dict(zip(columns, values))
-            observed = [c for c in candles[:-1] if c.timestamp >= signal["candle_timestamp"]]
+            # Stop and targets must be tracked intrabar. Entry analysis remains
+            # based on closed candles, but lifecycle monitoring includes the
+            # current forming candle so a hit is not hidden for up to 1h/4h/1d.
+            observed = [c for c in candles if c.timestamp >= signal["candle_timestamp"]]
+            closed_observed = [c for c in candles[:-1] if c.timestamp >= signal["candle_timestamp"]]
             if not observed: continue
             entry = signal["entry"]
             status = reason = price = None
@@ -162,8 +166,8 @@ class Store:
                 adverse = (max(c.high for c in used) - entry) / entry * 100
             self.db.execute("UPDATE signals SET max_favorable_pct=?, max_adverse_pct=? WHERE id=?",
                             (max(favorable, signal["max_favorable_pct"]), max(adverse, signal["max_adverse_pct"]), signal["id"]))
-            if not status and len(observed) >= expiry_bars:
-                status, price = "EXPIRED", observed[-1].close
+            if not status and len(closed_observed) >= expiry_bars:
+                status, price = "EXPIRED", closed_observed[-1].close
                 reason = f"Expirada após {expiry_bars} candles sem atingir alvo ou stop"
             if status:
                 self.db.execute("""UPDATE signals SET status=?,closed_at=?,close_price=?,resolution_reason=? WHERE id=?""",
