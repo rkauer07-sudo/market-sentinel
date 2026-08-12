@@ -46,6 +46,8 @@ class Sentinel:
         if btc is None: raise RuntimeError("Nenhum mercado BTC disponível para calcular o regime")
         btc_candles = await btc[0].candles(btc[1], "1d", 260)
         regime = btc_regime(btc_candles)
+        btc_closed = btc_candles[:-1]
+        btc_change_30d = ((btc_closed[-1].close / btc_closed[-31].close) - 1) * 100 if len(btc_closed) >= 31 else None
         semaphore = asyncio.Semaphore(int(self.settings.runtime["max_concurrency"]))
         min_volume = float(self.settings.analysis["min_daily_quote_volume"])
         # Core assets are always monitored. RWAs with a known zero/low venue volume
@@ -63,7 +65,8 @@ class Sentinel:
                     expiry = int(self.settings.analysis.get("expiry_bars", {}).get(timeframe, 12))
                     resolutions.extend(self.store.reconcile(market, timeframe, candles, expiry))
                     opportunity = analyze(market, timeframe, candles, regime, self.settings.analysis)
-                    candidate = None if opportunity else analyze_potential(market, timeframe, candles, regime, self.settings.analysis)
+                    candidate = None if opportunity else analyze_potential(
+                        market, timeframe, candles, regime, self.settings.analysis, btc_change_30d)
                     return opportunity, candidate
                 except Exception as exc:
                     log.warning("%s %s %s: %s", market.venue, market.symbol, timeframe, exc)

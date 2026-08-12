@@ -76,3 +76,5 @@ class PotentialOpportunity:
     conditions: list[str]
     risks: list[str]
     candle_timestamp: int
+    technical_context: list[str] = field(default_factory=list)
+    risk_reward: float = 0.0

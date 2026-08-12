@@ -69,6 +69,7 @@ class Store:
             "trigger_price": c.trigger_price, "invalidation_price": c.invalidation_price,
             "target": c.target, "readiness": c.readiness, "conditions": c.conditions,
             "risks": c.risks, "candle_timestamp": c.candle_timestamp,
+            "technical_context": c.technical_context, "risk_reward": c.risk_reward,
         } for c in candidates]
         self.db.execute("""INSERT INTO candidate_snapshots(id,updated_at,payload_json) VALUES(1,?,?)
             ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,payload_json=excluded.payload_json""",

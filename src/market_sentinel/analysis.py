@@ -27,6 +27,14 @@ def nearest(values, price, below=True):
     return (max(eligible) if below else min(eligible)) if eligible else None
 
 
+def rsi(values, period=14):
+    if len(values) < period + 1: return None
+    changes = [b-a for a, b in zip(values[-period-1:-1], values[-period:])]
+    gains = fmean(max(x, 0) for x in changes); losses = fmean(max(-x, 0) for x in changes)
+    if losses == 0: return 100.0
+    return 100 - 100 / (1 + gains / losses)
+
+
 def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool, cfg: dict) -> Opportunity | None:
     minimum = int(cfg["min_candles"])
     if len(candles) < minimum: return None
@@ -89,7 +97,8 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
         reasons, risks, last.timestamp, breakdown, confirmations)
 
 
-def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool, cfg: dict) -> PotentialOpportunity | None:
+def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool, cfg: dict,
+                      btc_change_30d: float | None = None) -> PotentialOpportunity | None:
     if len(candles) < int(cfg["min_candles"]): return None
     closed = candles[:-1]; closes = [c.close for c in closed]; last = closed[-1]
     current_atr = atr(closed); ma20, ma50, ma200 = sma(closes, 20), sma(closes, 50), sma(closes, 200)
@@ -99,14 +108,29 @@ def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc
     zone = current_atr * float(cfg.get("potential_zone_atr", .65))
     trend_up, trend_down = last.close > ma20 > ma50 and last.close > ma200, last.close < ma20 < ma50 and last.close < ma200
     volume_ratio = last.volume / max(fmean([c.volume for c in closed[-21:-1]]), 1e-12)
+    current_rsi = rsi(closes) or 50
+    btc_text = "BTC em regime diário de alta" if btc_bullish else "BTC em regime diário defensivo/baixista"
+    if btc_change_30d is not None:
+        btc_text += f"; variação nos últimos 30 candles diários: {btc_change_30d:+.1f}%"
+    trend_text = ("Preço acima das SMA 20/50/200; tendência compradora alinhada" if trend_up else
+                  "Preço abaixo das SMA 20/50/200; tendência vendedora alinhada" if trend_down else
+                  "Médias 20/50/200 sem alinhamento completo; mercado em transição")
+    indicators = [btc_text, trend_text, f"RSI 14 em {current_rsi:.1f}",
+                  f"Volume atual em {volume_ratio:.2f}x a média de 20 candles",
+                  f"ATR 14 em {current_atr:.8g} ({current_atr/last.close*100:.2f}% do preço)"]
+    if support: indicators.append(f"Suporte técnico mais próximo em {support:.8g}")
+    if resistance: indicators.append(f"Resistência técnica mais próxima em {resistance:.8g}")
     def ready(distance, trend, btc):
         return min(90, round(35 + max(0, 25 * (1 - distance / zone)) + 15 * trend + 10 * btc + min(5, volume_ratio * 3)))
     if resistance and 0 <= resistance - last.close <= zone:
         r = ready(resistance-last.close, trend_up, btc_bullish)
-        return PotentialOpportunity(market,timeframe,"LONG","Possível rompimento de resistência",resistance,
-            resistance-current_atr,resistance+2*current_atr,r,
+        trigger, invalid, target = resistance, resistance-current_atr, resistance+2*current_atr
+        rr = abs(target-trigger) / max(abs(trigger-invalid), 1e-12)
+        return PotentialOpportunity(market,timeframe,"LONG","Possível rompimento de resistência",trigger,
+            invalid,target,r,
             [f"Fechamento acima de {resistance:.8g}","Volume do candle de confirmação ≥ 1,5x da média","Sustentar o nível rompido no reteste"],
-            ["Rejeição na resistência","Rompimento sem volume pode ser falso","BTC enfraquecer antes da confirmação"],last.timestamp)
+            ["Rejeição na resistência","Rompimento sem volume pode ser falso","BTC enfraquecer antes da confirmação"],last.timestamp,
+            indicators, rr)
     if support and 0 <= last.close - support <= zone:
         direction = "LONG" if not trend_down else "SHORT"
         scenario = "Possível reação no suporte" if direction == "LONG" else "Possível perda de suporte"
@@ -115,8 +139,10 @@ def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc
         target = resistance or (support + 2*current_atr if direction == "LONG" else support-2*current_atr)
         r = ready(last.close-support, not trend_down if direction == "LONG" else trend_down, btc_bullish if direction == "LONG" else not btc_bullish)
         conditions = ([f"Reação compradora e fechamento acima de {trigger:.8g}","Pavio de rejeição ou candle de força","Volume crescente na defesa"] if direction == "LONG" else [f"Fechamento abaixo de {support:.8g}","Volume ≥ 1,5x da média","Reteste do suporte perdido sem recuperação"])
+        rr = abs(target-trigger) / max(abs(trigger-invalid), 1e-12)
         return PotentialOpportunity(market,timeframe,direction,scenario,trigger,invalid,target,r,conditions,
-            ["O nível pode não confirmar","Movimento antecipado aumenta o risco","Mudança brusca no BTC invalida o contexto"],last.timestamp)
+            ["O nível pode não confirmar","Movimento antecipado aumenta o risco","Mudança brusca no BTC invalida o contexto"],last.timestamp,
+            indicators, rr)
     return None
 
 

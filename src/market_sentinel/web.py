@@ -105,6 +105,7 @@ def serialize_candidate(candidate):
         "target": candidate.target, "readiness": candidate.readiness,
         "conditions": candidate.conditions, "risks": candidate.risks,
         "candle_timestamp": candidate.candle_timestamp,
+        "technical_context": candidate.technical_context, "risk_reward": candidate.risk_reward,
     }
 
 
