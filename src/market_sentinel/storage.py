@@ -224,7 +224,12 @@ class Store:
         return f"{self.remote_url}/storage/v1/object/{self.remote_bucket}/{self.remote_object}"
 
     def _remote_headers(self):
-        return {"Authorization": f"Bearer {self.remote_key}", "apikey": self.remote_key}
+        headers = {"apikey": self.remote_key}
+        # New sb_secret_* keys are opaque API keys and are rejected as Bearer
+        # JWTs. Legacy service_role JWTs still require Authorization.
+        if not self.remote_key.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {self.remote_key}"
+        return headers
 
     def _download_remote(self):
         response = httpx.get(self._remote_object_url(), headers=self._remote_headers(), timeout=30)
