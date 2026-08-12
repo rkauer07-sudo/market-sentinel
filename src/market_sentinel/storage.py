@@ -233,9 +233,14 @@ class Store:
 
     def _download_remote(self):
         response = httpx.get(self._remote_object_url(), headers=self._remote_headers(), timeout=30)
-        if response.status_code == 404:
+        detail = response.text[:500]
+        # Supabase Storage may encode a missing bucket/object as HTTP 400 with
+        # an internal 404 status. An empty first run is valid and creates DB locally.
+        if response.status_code == 404 or (response.status_code == 400 and
+                any(term in detail.lower() for term in ("not found", "does not exist", '"statuscode":"404"'))):
             return
-        response.raise_for_status()
+        if response.is_error:
+            raise RuntimeError(f"Supabase Storage respondeu {response.status_code}: {detail}")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not response.content.startswith(b"SQLite format 3"):
             raise RuntimeError("O objeto baixado do Supabase não é um banco SQLite válido")
