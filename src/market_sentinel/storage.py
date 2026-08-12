@@ -24,7 +24,7 @@ class Store:
                 self.remote_error = f"{type(exc).__name__}: {exc}"
         self.last_remote_sync = time.time()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS alerts (
@@ -253,7 +253,7 @@ class Store:
         except Exception as exc:
             self.remote_error = f"{type(exc).__name__}: {exc}"
         finally:
-            self.db = sqlite3.connect(self.path)
+            self.db = sqlite3.connect(self.path, check_same_thread=False)
             self.last_remote_sync = time.time()
 
     def close(self):

@@ -134,7 +134,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
         if request.url.path.startswith("/api/"):
-            await asyncio.to_thread(dashboard.sentinel.store.sync_from_remote)
+            # sqlite3 connections are thread-bound by default. Keep refresh in
+            # the request thread so closing/reopening the shared connection is safe.
+            dashboard.sentinel.store.sync_from_remote()
         if request.url.path == "/health" or not (auth_user and auth_password):
             return await call_next(request)
         header = request.headers.get("Authorization", "")
