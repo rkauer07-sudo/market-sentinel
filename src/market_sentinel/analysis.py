@@ -35,6 +35,35 @@ def rsi(values, period=14):
     return 100 - 100 / (1 + gains / losses)
 
 
+def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direction: str,
+                              current_atr: float, lookback: int = 6) -> float | None:
+    """Find a breakout followed by a later closed-candle retest and rejection."""
+    if len(candles) < 3 or not levels:
+        return None
+    confirmation = candles[-1]
+    tolerance = current_atr * .35
+    matches: list[tuple[int, float]] = []
+    for index in range(max(1, len(candles) - lookback - 1), len(candles) - 1):
+        breakout, previous = candles[index], candles[index - 1]
+        history = candles[max(0, index - 20):index]
+        avg_volume = fmean(c.volume for c in history) if history else 0
+        volume_ok = bool(avg_volume and breakout.volume / avg_volume >= 1.5)
+        for level in levels:
+            if direction == "LONG":
+                broke = previous.close <= level < breakout.close
+                retested = confirmation.low <= level + tolerance and confirmation.close > level
+                rejected = confirmation.close > confirmation.open and confirmation.close >= (
+                    confirmation.low + .55 * (confirmation.high - confirmation.low))
+            else:
+                broke = previous.close >= level > breakout.close
+                retested = confirmation.high >= level - tolerance and confirmation.close < level
+                rejected = confirmation.close < confirmation.open and confirmation.close <= (
+                    confirmation.low + .45 * (confirmation.high - confirmation.low))
+            if broke and volume_ok and retested and rejected:
+                matches.append((index, level))
+    return max(matches, key=lambda item: item[0])[1] if matches else None
+
+
 def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool, cfg: dict) -> Opportunity | None:
     minimum = int(cfg["min_candles"])
     if len(candles) < minimum: return None
@@ -51,17 +80,17 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     trend_down = last.close < ma20 < ma50 and last.close < ma200
     tolerance = current_atr * float(cfg["zone_tolerance_atr"])
     setup = direction = None
-    if resistance and previous.close <= resistance < last.close and volume_ratio >= 1.5:
-        setup, direction, entry, stop = "rompimento com volume", "LONG", last.close, resistance - current_atr
+    retest_lookback = int(cfg.get("retest_lookback_bars", 6))
+    long_retest = confirmed_breakout_retest(closed, highs, "LONG", current_atr, retest_lookback)
+    short_retest = confirmed_breakout_retest(closed, lows, "SHORT", current_atr, retest_lookback)
+    if long_retest is not None:
+        setup, direction, entry, stop = "rompimento + reteste confirmado", "LONG", last.close, long_retest - current_atr
         target1 = entry + 2.2 * (entry - stop)
     elif support and abs(last.low - support) <= tolerance and last.close > support and last.close > last.open and volume_ratio >= 0.8:
         setup, direction, entry, stop = "reteste de suporte", "LONG", last.close, support - 0.8 * current_atr
         target1 = resistance or entry + 2.2 * (entry - stop)
-    elif support and previous.close < support < last.close and volume_ratio >= 1.2:
-        setup, direction, entry, stop = "recuperação de suporte", "LONG", last.close, min(last.low, support - 0.5 * current_atr)
-        target1 = resistance or entry + 2.2 * (entry - stop)
-    elif support and previous.close >= support > last.close and volume_ratio >= 1.5:
-        setup, direction, entry, stop = "perda de suporte com volume", "SHORT", last.close, support + current_atr
+    elif short_retest is not None:
+        setup, direction, entry, stop = "perda + reteste confirmado", "SHORT", last.close, short_retest + current_atr
         target1 = entry - 2.2 * (stop - entry)
     else:
         return None

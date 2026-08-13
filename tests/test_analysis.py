@@ -1,4 +1,4 @@
-from market_sentinel.analysis import analyze, btc_regime
+from market_sentinel.analysis import analyze, btc_regime, confirmed_breakout_retest
 from market_sentinel.models import AssetClass, Candle, Market
 
 
@@ -24,3 +24,20 @@ def test_analysis_never_uses_open_candle():
            "min_daily_quote_volume": 500000, "pivot_window": 3, "zone_tolerance_atr": .35}
     assert analyze(market, "1h", rows, True, cfg) is None
 
+
+def test_breakout_close_is_not_an_entry_before_retest():
+    rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
+    rows += [Candle(20, 99, 103, 99, 102, 200)]
+    assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None
+
+
+def test_long_entry_requires_later_closed_retest_rejection():
+    rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
+    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 101, 103, 99.8, 102.5, 120)]
+    assert confirmed_breakout_retest(rows, [100], "LONG", 2) == 100
+
+
+def test_retest_without_rejection_is_not_confirmed():
+    rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
+    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 102, 102.2, 99.8, 100.1, 120)]
+    assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None

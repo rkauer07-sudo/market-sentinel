@@ -25,6 +25,7 @@ analysis:
   max_spread_pct: 0.30
   pivot_window: 3
   zone_tolerance_atr: 0.35
+  retest_lookback_bars: 6
   alert_cooldown_hours: 12
   expiry_bars:
     1h: 24
