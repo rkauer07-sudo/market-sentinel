@@ -84,12 +84,20 @@ class Sentinel:
             if self.store.should_send(op, int(self.settings.analysis["alert_cooldown_hours"])):
                 log.info("ALERTA %s %s score=%d rr=%.2f", op.market.key, op.timeframe, op.score, op.risk_reward)
                 if self.notifier.configured:
-                    await self.notifier.send(op); self.store.mark_sent(op)
+                    try:
+                        await self.notifier.send(op)
+                    except Exception:
+                        log.exception("Falha ao enviar alerta ao Telegram; snapshot será preservado")
+                    else:
+                        self.store.mark_sent(op)
         for resolution in resolutions:
             log.info("OPORTUNIDADE ENCERRADA %s:%s %s: %s", resolution["venue"], resolution["symbol"],
                      resolution["status"], resolution["resolution_reason"])
             if self.notifier.configured:
-                await self.notifier.send_resolution(resolution)
+                try:
+                    await self.notifier.send_resolution(resolution)
+                except Exception:
+                    log.exception("Falha ao enviar resolução ao Telegram; snapshot será preservado")
         return opportunities
 
     async def run_forever(self):
