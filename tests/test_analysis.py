@@ -33,11 +33,27 @@ def test_breakout_close_is_not_an_entry_before_retest():
 
 def test_long_entry_requires_later_closed_retest_rejection():
     rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
-    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 101, 103, 99.8, 102.5, 120)]
+    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 102, 104, 101, 103, 100),
+             Candle(22, 101, 103, 99.8, 102.5, 120)]
     assert confirmed_breakout_retest(rows, [100], "LONG", 2) == 100
 
 
 def test_retest_without_rejection_is_not_confirmed():
     rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
-    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 102, 102.2, 99.8, 100.1, 120)]
+    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 102, 104, 101, 103, 100),
+             Candle(22, 102, 102.2, 99.8, 100.1, 120)]
+    assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None
+
+
+def test_retest_on_first_candle_is_too_early():
+    rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
+    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 101, 103, 99.8, 102.5, 120)]
+    assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None
+
+
+def test_retest_after_third_candle_is_too_late():
+    rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
+    rows += [Candle(20, 99, 103, 99, 102, 200)]
+    rows += [Candle(i, 102, 104, 101, 103, 100) for i in range(21, 24)]
+    rows += [Candle(24, 101, 103, 99.8, 102.5, 120)]
     assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None

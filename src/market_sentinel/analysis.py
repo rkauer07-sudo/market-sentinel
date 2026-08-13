@@ -36,14 +36,20 @@ def rsi(values, period=14):
 
 
 def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direction: str,
-                              current_atr: float, lookback: int = 6) -> float | None:
-    """Find a breakout followed by a later closed-candle retest and rejection."""
+                              current_atr: float, min_bars: int = 2,
+                              max_bars: int = 3) -> float | None:
+    """Find a breakout retested and rejected 2-3 closed candles later."""
     if len(candles) < 3 or not levels:
         return None
     confirmation = candles[-1]
     tolerance = current_atr * .35
     matches: list[tuple[int, float]] = []
-    for index in range(max(1, len(candles) - lookback - 1), len(candles) - 1):
+    confirmation_index = len(candles) - 1
+    first_breakout = max(1, confirmation_index - max_bars)
+    last_breakout = confirmation_index - min_bars
+    if last_breakout < first_breakout:
+        return None
+    for index in range(first_breakout, last_breakout + 1):
         breakout, previous = candles[index], candles[index - 1]
         history = candles[max(0, index - 20):index]
         avg_volume = fmean(c.volume for c in history) if history else 0
@@ -80,9 +86,12 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     trend_down = last.close < ma20 < ma50 and last.close < ma200
     tolerance = current_atr * float(cfg["zone_tolerance_atr"])
     setup = direction = None
-    retest_lookback = int(cfg.get("retest_lookback_bars", 6))
-    long_retest = confirmed_breakout_retest(closed, highs, "LONG", current_atr, retest_lookback)
-    short_retest = confirmed_breakout_retest(closed, lows, "SHORT", current_atr, retest_lookback)
+    retest_min_bars = int(cfg.get("retest_min_bars", 2))
+    retest_max_bars = int(cfg.get("retest_max_bars", 3))
+    long_retest = confirmed_breakout_retest(
+        closed, highs, "LONG", current_atr, retest_min_bars, retest_max_bars)
+    short_retest = confirmed_breakout_retest(
+        closed, lows, "SHORT", current_atr, retest_min_bars, retest_max_bars)
     if long_retest is not None:
         setup, direction, entry, stop = "rompimento + reteste confirmado", "LONG", last.close, long_retest - current_atr
         target1 = entry + 2.2 * (entry - stop)
