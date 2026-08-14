@@ -31,11 +31,13 @@ def test_target_resolves_signal_and_creates_visual_event(tmp_path):
     store.close()
 
 
-def test_same_candle_stop_and_target_is_conservative(tmp_path):
+def test_same_candle_target_counts_as_success_even_if_stop_is_also_hit(tmp_path):
     store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
     candles = [Candle(100, 100, 102, 99, 101, 1), Candle(200, 101, 112, 94, 106, 1),
                Candle(300, 106, 107, 105, 106, 1)]
-    assert store.reconcile(op.market, "1h", candles, 24)[0]["status"] == "FAILED"
+    resolved = store.reconcile(op.market, "1h", candles, 24)[0]
+    assert resolved["status"] == "SUCCESS_T1"
+    assert resolved["resolution_reason"] == "Bateu alvo 1; oportunidade considerada sucesso"
     store.close()
 
 

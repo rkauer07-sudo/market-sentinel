@@ -60,6 +60,7 @@ class Dashboard:
     async def loop(self):
         interval = int(self.settings.runtime["scan_interval_seconds"])
         while True:
+            cycle_started = time.monotonic()
             try:
                 async with self.scan_lock:
                     self.last_opportunities = await self.sentinel.scan_once()
@@ -67,7 +68,7 @@ class Dashboard:
             except asyncio.CancelledError: raise
             except Exception as exc:
                 self.last_error = str(exc); logging.getLogger(__name__).exception("Falha no ciclo automático")
-            await asyncio.sleep(interval)
+            await asyncio.sleep(max(0, interval - (time.monotonic() - cycle_started)))
 
     def start(self):
         if self.task and not self.task.done(): return False
@@ -134,7 +135,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") and not dashboard.running:
             # sqlite3 connections are thread-bound by default. Keep refresh in
             # the request thread so closing/reopening the shared connection is safe.
             dashboard.sentinel.store.sync_from_remote()
@@ -164,8 +165,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         for _, market in dashboard.sentinel.markets:
             classes[market.asset_class.value] = classes.get(market.asset_class.value, 0) + 1
         lifecycle = dashboard.sentinel.store.signal_stats()
-        scheduled = bool(dashboard.sentinel.store.remote_url and dashboard.sentinel.store.remote_key
-                         and not dashboard.sentinel.store.remote_error)
+        scheduled = bool(not dashboard.running and dashboard.sentinel.store.remote_url
+                         and dashboard.sentinel.store.remote_key and not dashboard.sentinel.store.remote_error)
         return {"running": dashboard.running, "scanning": dashboard.scan_lock.locked(),
                 "scheduled": scheduled, "last_scan_at": dashboard.sentinel.store.snapshot_updated_at(),
                 "storage_error": dashboard.sentinel.store.remote_error,

@@ -102,10 +102,12 @@ class Sentinel:
 
     async def run_forever(self):
         log.info("Market Sentinel iniciado (Telegram: %s)", "configurado" if self.notifier.configured else "desativado")
+        interval = int(self.settings.runtime["scan_interval_seconds"])
         while True:
+            cycle_started = time.monotonic()
             try: await self.scan_once()
             except Exception: log.exception("Falha no ciclo de varredura")
-            await asyncio.sleep(int(self.settings.runtime["scan_interval_seconds"]))
+            await asyncio.sleep(max(0, interval - (time.monotonic() - cycle_started)))
 
     async def close(self):
         self.store.close(); await self.client.aclose()

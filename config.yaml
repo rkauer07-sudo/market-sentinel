@@ -33,7 +33,7 @@ analysis:
     4h: 12
     1d: 5
 runtime:
-  scan_interval_seconds: 300
+  scan_interval_seconds: 60
   market_refresh_hours: 6
   max_concurrency: 8
   database_path: data/sentinel.db

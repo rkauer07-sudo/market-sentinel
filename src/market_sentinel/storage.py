@@ -116,7 +116,10 @@ class Store:
             row = self.db.execute("SELECT id FROM signals WHERE signal_key=?", (key,)).fetchone()
             return row[0], False
         signal_id = cursor.lastrowid
-        self._event(signal_id, "CREATED", f"Oportunidade registrada: {op.setup}", op.entry)
+        targets = f"alvo 1 {op.target1:.8g}"
+        if op.target2 is not None:
+            targets += f" e alvo 2 {op.target2:.8g}"
+        self._event(signal_id, "CREATED", f"Oportunidade registrada: {op.setup}; {targets}", op.entry)
         self.db.commit()
         return signal_id, True
 
@@ -145,16 +148,17 @@ class Store:
                     stop_hit = candle.high >= signal["stop"]
                     target2_hit = signal["target2"] is not None and candle.low <= signal["target2"]
                     target1_hit = candle.low <= signal["target1"]
-                # OHLC cannot reveal intrabar ordering, so a bar touching both is scored conservatively.
-                if stop_hit:
-                    status, price = "FAILED", signal["stop"]
-                    reason = "Stop/invalidação atingido antes de confirmação inequívoca do alvo"
-                elif target2_hit:
+                # Reaching any target makes the opportunity a success, even if
+                # the same candle or a later move also reaches the stop.
+                if target2_hit:
                     status, price = "SUCCESS_T2", signal["target2"]
-                    reason = "Segundo alvo atingido; oportunidade plenamente concretizada"
+                    reason = "Bateu alvo 2; oportunidade considerada sucesso"
                 elif target1_hit:
                     status, price = "SUCCESS_T1", signal["target1"]
-                    reason = "Primeiro alvo atingido; oportunidade concretizada"
+                    reason = "Bateu alvo 1; oportunidade considerada sucesso"
+                elif stop_hit:
+                    status, price = "FAILED", signal["stop"]
+                    reason = "Stop/invalidação atingido sem nenhum alvo alcançado"
                 if status:
                     used = observed[:index + 1]
                     break
