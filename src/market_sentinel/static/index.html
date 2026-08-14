@@ -79,4 +79,5 @@ const renderChart=drawChart;drawChart=function(data){const b=data.signal.score_b
 function closeChart(){$('#chartModal').classList.remove('open')}
 $('#cards').addEventListener('click',e=>{const card=e.target.closest('.op');if(card?.dataset.id)openChart(card.dataset.id)});$('#chartModal').addEventListener('click',e=>{if(e.target.id==='chartModal')closeChart()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeChart()});
 </script>
+<script src="/static/i18n-full.js"></script>
 </body></html>

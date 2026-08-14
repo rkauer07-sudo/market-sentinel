@@ -131,7 +131,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     app = FastAPI(title="Market Sentinel", version="0.1.0", lifespan=lifespan)
     app.state.dashboard = dashboard
-    static = Path(__file__).parent / "static" / "index.html"
+    static_dir = Path(__file__).parent / "static"
+    static = static_dir / "index.html"
     auth_user = os.getenv("DASHBOARD_USER")
     auth_password = os.getenv("DASHBOARD_PASSWORD")
 
@@ -160,6 +161,10 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def index(): return FileResponse(static)
+
+    @app.get("/static/i18n-full.js", include_in_schema=False)
+    async def dashboard_i18n():
+        return FileResponse(static_dir / "i18n-full.js", media_type="application/javascript")
 
     @app.get("/api/status")
     async def status():
