@@ -31,13 +31,15 @@ def format_alert(op: Opportunity) -> str:
     strength = "FORTE" if op.score >= 80 else "MODERADA"
     reasons = "\n".join(f"• {html.escape(x)}" for x in op.reasons)
     risks = "\n".join(f"• {html.escape(x)}" for x in op.risks) or "• Nenhum risco técnico adicional detectado"
+    targets = "".join(f"Alvo {index} (Fib): <code>{target:.8g}</code>\n"
+                      for index, target in enumerate(op.targets, 1))
     return (f"{icon} <b>OPORTUNIDADE {strength}</b>\n\n"
         f"<b>{html.escape(op.market.symbol)} · {op.timeframe} · {op.direction}</b>\n"
         f"Venue: {op.market.venue} | Tipo: {op.market.market_type}\n"
         f"Classe: {op.market.asset_class.value}\n"
         f"Score: <b>{op.score}/100</b> | R:R: <b>{op.risk_reward:.2f}</b>\n\n"
         f"Entrada técnica: <code>{op.entry:.8g}</code>\nStop/invalidação: <code>{op.stop:.8g}</code>\n"
-        f"Alvo 1: <code>{op.target1:.8g}</code>\nAlvo 2: <code>{op.target2:.8g}</code>\n\n"
+        f"{targets}\n"
         f"<b>Confirmações</b>\n{reasons}\n\n<b>Riscos</b>\n{risks}\n\n"
         "⚠️ Alerta técnico informativo; não é ordem nem recomendação financeira.")
 

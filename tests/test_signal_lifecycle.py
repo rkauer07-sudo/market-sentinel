@@ -1,5 +1,6 @@
 from market_sentinel.models import AssetClass, Candle, Market, Opportunity
 from market_sentinel.storage import Store
+from market_sentinel.analysis import fibonacci_targets
 
 
 def opportunity(direction="LONG"):
@@ -8,8 +9,15 @@ def opportunity(direction="LONG"):
         entry, stop, target1, target2 = 100, 95, 110, 120
     else:
         entry, stop, target1, target2 = 100, 105, 90, 80
+    step = 1 if direction == "LONG" else -1
     return Opportunity(market, "1h", direction, "teste", entry, stop, target1, target2,
+                       entry + step * 15, entry + step * 17.5, entry + step * 20,
                        2, 80, ["teste"], [], 100)
+
+
+def test_fibonacci_targets_for_long_and_short():
+    assert fibonacci_targets(100, 95, "LONG") == (105, 106.36, 108.09, 110, 113.09)
+    assert fibonacci_targets(100, 105, "SHORT") == (95, 93.64, 91.91, 90, 86.91)
 
 
 def test_signal_stays_active_when_setup_disappears(tmp_path):
@@ -38,6 +46,16 @@ def test_same_candle_target_counts_as_success_even_if_stop_is_also_hit(tmp_path)
     resolved = store.reconcile(op.market, "1h", candles, 24)[0]
     assert resolved["status"] == "SUCCESS_T1"
     assert resolved["resolution_reason"] == "Bateu alvo 1; oportunidade considerada sucesso"
+    store.close()
+
+
+def test_highest_fibonacci_target_hit_is_recorded(tmp_path):
+    store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
+    candles = [Candle(100, 100, 121, 99, 119, 1), Candle(200, 119, 120, 118, 119, 1)]
+    resolved = store.reconcile(op.market, "1h", candles, 24)[0]
+    assert resolved["status"] == "SUCCESS_T5"
+    assert resolved["resolution_reason"] == "Bateu alvo 5; oportunidade considerada sucesso"
+    assert store.signal_stats()["wins"] == 1
     store.close()
 
 

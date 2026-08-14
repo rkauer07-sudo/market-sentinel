@@ -59,6 +59,9 @@ class Store:
         self._ensure_column("signals", "risks_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("signals", "score_breakdown_json", "TEXT NOT NULL DEFAULT '{}'")
         self._ensure_column("signals", "confirmation_count", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("signals", "target3", "REAL")
+        self._ensure_column("signals", "target4", "REAL")
+        self._ensure_column("signals", "target5", "REAL")
         self.db.commit()
 
     def save_candidates(self, candidates):
@@ -104,21 +107,21 @@ class Store:
         key = f"{op.fingerprint}:{op.candle_timestamp}"
         cursor = self.db.execute("""INSERT OR IGNORE INTO signals
             (signal_key,fingerprint,venue,symbol,asset_class,market_type,timeframe,direction,setup,
-             entry,stop,target1,target2,risk_reward,score,opened_at,candle_timestamp,status,reasons_json,risks_json,
+             entry,stop,target1,target2,target3,target4,target5,risk_reward,score,opened_at,candle_timestamp,status,reasons_json,risks_json,
              score_breakdown_json,confirmation_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?)""",
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?)""",
             (key, op.fingerprint, op.market.venue, op.market.symbol, op.market.asset_class.value,
              op.market.market_type, op.timeframe, op.direction, op.setup, op.entry, op.stop,
-             op.target1, op.target2, op.risk_reward, op.score, int(time.time()), op.candle_timestamp,
+             op.target1, op.target2, op.target3, op.target4, op.target5,
+             op.risk_reward, op.score, int(time.time()), op.candle_timestamp,
              json.dumps(op.reasons, ensure_ascii=False), json.dumps(op.risks, ensure_ascii=False),
              json.dumps(op.score_breakdown, ensure_ascii=False), op.confirmation_count))
         if not cursor.rowcount:
             row = self.db.execute("SELECT id FROM signals WHERE signal_key=?", (key,)).fetchone()
             return row[0], False
         signal_id = cursor.lastrowid
-        targets = f"alvo 1 {op.target1:.8g}"
-        if op.target2 is not None:
-            targets += f" e alvo 2 {op.target2:.8g}"
+        targets = ", ".join(f"alvo {index} {target:.8g}"
+                            for index, target in enumerate(op.targets, 1))
         self._event(signal_id, "CREATED", f"Oportunidade registrada: {op.setup}; {targets}", op.entry)
         self.db.commit()
         return signal_id, True
@@ -142,20 +145,20 @@ class Store:
             for index, candle in enumerate(observed):
                 if signal["direction"] == "LONG":
                     stop_hit = candle.low <= signal["stop"]
-                    target2_hit = signal["target2"] is not None and candle.high >= signal["target2"]
-                    target1_hit = candle.high >= signal["target1"]
+                    hit_targets = [(number, signal[f"target{number}"]) for number in range(1, 6)
+                                   if signal.get(f"target{number}") is not None
+                                   and candle.high >= signal[f"target{number}"]]
                 else:
                     stop_hit = candle.high >= signal["stop"]
-                    target2_hit = signal["target2"] is not None and candle.low <= signal["target2"]
-                    target1_hit = candle.low <= signal["target1"]
+                    hit_targets = [(number, signal[f"target{number}"]) for number in range(1, 6)
+                                   if signal.get(f"target{number}") is not None
+                                   and candle.low <= signal[f"target{number}"]]
                 # Reaching any target makes the opportunity a success, even if
                 # the same candle or a later move also reaches the stop.
-                if target2_hit:
-                    status, price = "SUCCESS_T2", signal["target2"]
-                    reason = "Bateu alvo 2; oportunidade considerada sucesso"
-                elif target1_hit:
-                    status, price = "SUCCESS_T1", signal["target1"]
-                    reason = "Bateu alvo 1; oportunidade considerada sucesso"
+                if hit_targets:
+                    target_number, price = hit_targets[-1]
+                    status = f"SUCCESS_T{target_number}"
+                    reason = f"Bateu alvo {target_number}; oportunidade considerada sucesso"
                 elif stop_hit:
                     status, price = "FAILED", signal["stop"]
                     reason = "Stop/invalidação atingido sem nenhum alvo alcançado"
@@ -207,7 +210,7 @@ class Store:
     def signal_stats(self) -> dict:
         rows = self.db.execute("SELECT status,COUNT(*) FROM signals GROUP BY status").fetchall()
         counts = dict(rows); resolved = sum(v for k, v in counts.items() if k != "ACTIVE")
-        wins = counts.get("SUCCESS_T1", 0) + counts.get("SUCCESS_T2", 0)
+        wins = sum(counts.get(f"SUCCESS_T{number}", 0) for number in range(1, 6))
         return {"counts": counts, "resolved": resolved, "wins": wins,
                 "success_rate": round(wins / resolved * 100, 1) if resolved else None}
 

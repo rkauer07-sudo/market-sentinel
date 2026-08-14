@@ -91,7 +91,9 @@ def serialize_opportunity(op):
         "venue": op.market.venue, "symbol": op.market.symbol, "asset_class": op.market.asset_class.value,
         "market_type": op.market.market_type, "timeframe": op.timeframe, "direction": op.direction,
         "setup": op.setup, "entry": op.entry, "stop": op.stop, "target1": op.target1,
-        "target2": op.target2, "risk_reward": op.risk_reward, "score": op.score,
+        "target2": op.target2, "target3": op.target3, "target4": op.target4,
+        "target5": op.target5, "targets": op.targets,
+        "risk_reward": op.risk_reward, "score": op.score,
         "reasons": op.reasons, "risks": op.risks, "candle_timestamp": op.candle_timestamp,
         "score_breakdown": op.score_breakdown, "confirmation_count": op.confirmation_count,
     }

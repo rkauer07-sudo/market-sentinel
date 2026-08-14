@@ -49,6 +49,9 @@ class Opportunity:
     stop: float
     target1: float
     target2: float | None
+    target3: float | None
+    target4: float | None
+    target5: float | None
     risk_reward: float
     score: int
     reasons: list[str]
@@ -56,6 +59,12 @@ class Opportunity:
     candle_timestamp: int
     score_breakdown: dict[str, int] = field(default_factory=dict)
     confirmation_count: int = 0
+
+    @property
+    def targets(self) -> list[float]:
+        return [target for target in (
+            self.target1, self.target2, self.target3, self.target4, self.target5
+        ) if target is not None]
 
     @property
     def fingerprint(self) -> str:

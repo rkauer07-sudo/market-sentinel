@@ -35,6 +35,13 @@ def rsi(values, period=14):
     return 100 - 100 / (1 + gains / losses)
 
 
+def fibonacci_targets(entry: float, stop: float, direction: str) -> tuple[float, ...]:
+    """Five Fibonacci extensions measured from entry using the stop distance as 1R."""
+    risk = abs(entry - stop)
+    sign = 1 if direction == "LONG" else -1
+    return tuple(entry + sign * ratio * risk for ratio in (1.0, 1.272, 1.618, 2.0, 2.618))
+
+
 def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direction: str,
                               current_atr: float, min_bars: int = 2,
                               max_bars: int = 3) -> float | None:
@@ -94,18 +101,16 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
         closed, lows, "SHORT", current_atr, retest_min_bars, retest_max_bars)
     if long_retest is not None:
         setup, direction, entry, stop = "rompimento + reteste confirmado", "LONG", last.close, long_retest - current_atr
-        target1 = entry + 2.2 * (entry - stop)
     elif support and abs(last.low - support) <= tolerance and last.close > support and last.close > last.open and volume_ratio >= 0.8:
         setup, direction, entry, stop = "reteste de suporte", "LONG", last.close, support - 0.8 * current_atr
-        target1 = resistance or entry + 2.2 * (entry - stop)
     elif short_retest is not None:
         setup, direction, entry, stop = "perda + reteste confirmado", "SHORT", last.close, short_retest + current_atr
-        target1 = entry - 2.2 * (stop - entry)
     else:
         return None
-    risk = abs(entry - stop); reward = abs(target1 - entry)
+    risk = abs(entry - stop)
     if risk <= 0: return None
-    rr = reward / risk
+    target1, target2, target3, target4, target5 = fibonacci_targets(entry, stop, direction)
+    rr = 2.618
     reasons, risks = [f"Estrutura confirmada: {setup}"], []
     aligned = trend_up if direction == "LONG" else trend_down
     btc_aligned = (btc_bullish and direction == "LONG") or (not btc_bullish and direction == "SHORT")
@@ -130,8 +135,8 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     if market.daily_quote_volume < float(cfg["min_daily_quote_volume"]): risks.append("Liquidez diária abaixo do filtro preferencial")
     if rr < float(cfg["min_risk_reward"]) or score < int(cfg["min_score"]) or confirmations < int(cfg.get("min_confirmations", 5)): return None
     if score >= int(cfg.get("strong_score", 85)) and (not aligned or volume_ratio < 1.5): return None
-    target2 = entry + (3.5 * risk if direction == "LONG" else -3.5 * risk)
-    return Opportunity(market, timeframe, direction, setup, entry, stop, target1, target2, rr, score,
+    return Opportunity(market, timeframe, direction, setup, entry, stop,
+        target1, target2, target3, target4, target5, rr, score,
         reasons, risks, last.timestamp, breakdown, confirmations)
 
 
