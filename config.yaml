@@ -19,7 +19,7 @@ analysis:
   min_risk_reward: 2.0
   min_score: 75
   strong_score: 85
-  min_confirmations: 5
+  min_confirmations: 6
   potential_zone_atr: 0.65
   min_daily_quote_volume: 500000
   max_spread_pct: 0.30

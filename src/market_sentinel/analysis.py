@@ -1,6 +1,7 @@
 from __future__ import annotations
 from statistics import fmean
 from .models import Candle, Market, Opportunity, PotentialOpportunity
+from .vibe_indicators import technical_snapshot
 
 
 def sma(values, period):
@@ -109,22 +110,28 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
         return None
     risk = abs(entry - stop)
     if risk <= 0: return None
+    vibe = technical_snapshot(closes)
+    if vibe is None or not vibe.confirms(direction, entry):
+        return None
     target1, target2, target3, target4, target5 = fibonacci_targets(entry, stop, direction)
     rr = 2.618
-    reasons, risks = [f"Estrutura confirmada: {setup}"], []
+    reasons, risks = [f"Estrutura confirmada: {setup}",
+        (f"Vibe-Trading confirmado: RSI {vibe.rsi:.1f}, MACD histograma "
+         f"{vibe.macd_histogram:.6g}, EMA20 {vibe.ema20:.8g}")], []
     aligned = trend_up if direction == "LONG" else trend_down
     btc_aligned = (btc_bullish and direction == "LONG") or (not btc_bullish and direction == "SHORT")
     breakdown = {
-        "Estrutura": 20,
-        "Tendência": 20 if aligned else 0,
+        "Estrutura": 15,
+        "Tendência": 15 if aligned else 0,
         "Volume": 15 if volume_ratio >= 2 else 12 if volume_ratio >= 1.5 else 8 if volume_ratio >= 1.2 else 4 if volume_ratio >= 1 else 0,
         "Contexto BTC": 15 if btc_aligned else 0,
         "Risco/retorno": 15 if rr >= 3 else 12 if rr >= 2.5 else 9 if rr >= float(cfg["min_risk_reward"]) else 0,
         "Liquidez": 10 if market.daily_quote_volume >= 5_000_000 else 8 if market.daily_quote_volume >= 1_000_000 else 6 if market.daily_quote_volume >= float(cfg["min_daily_quote_volume"]) else 0,
         "Precisão da entrada": 5 if abs(entry - ma20) <= 1.5 * current_atr else 2 if abs(entry - ma20) <= 2.5 * current_atr else 0,
+        "Vibe-Trading": 10,
     }
     score = min(sum(breakdown.values()), 100)
-    confirmations = 1 + int(aligned) + int(btc_aligned) + int(volume_ratio >= 1.2) + int(rr >= float(cfg["min_risk_reward"])) + int(breakdown["Liquidez"] > 0) + int(breakdown["Precisão da entrada"] > 0)
+    confirmations = 2 + int(aligned) + int(btc_aligned) + int(volume_ratio >= 1.2) + int(rr >= float(cfg["min_risk_reward"])) + int(breakdown["Liquidez"] > 0) + int(breakdown["Precisão da entrada"] > 0)
     if aligned: reasons.append("Tendência alinhada em 20/50/200 períodos")
     else: risks.append("Sinal não está plenamente alinhado à tendência principal")
     if btc_aligned:
