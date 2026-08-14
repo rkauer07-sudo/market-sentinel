@@ -71,7 +71,38 @@ class Store:
                 message='Oportunidade reativada; não há mais expiração por quantidade de candles',price=NULL
                 WHERE id=(SELECT id FROM signal_events WHERE signal_id=? AND event_type='EXPIRED'
                 ORDER BY id DESC LIMIT 1)""", (signal_id,))
+        self._repair_legacy_successes()
         self.db.commit()
+
+    def _repair_legacy_successes(self):
+        """Use persisted maximum favorable movement to fix pre-migration failures."""
+        columns = self._signal_columns()
+        rows = self.db.execute("SELECT * FROM signals WHERE status='FAILED'").fetchall()
+        for values in rows:
+            signal = dict(zip(columns, values))
+            reached = 0
+            for number in range(1, 6):
+                target = signal.get(f"target{number}")
+                if target is None:
+                    continue
+                required_pct = abs(target - signal["entry"]) / signal["entry"] * 100
+                if signal["max_favorable_pct"] + 1e-9 >= required_pct:
+                    reached = number
+            if not reached:
+                continue
+            status = f"SUCCESS_T{reached}"
+            price = signal[f"target{reached}"]
+            reason = (f"Auditoria histórica: movimento registrado atingiu o alvo {reached}; "
+                      "falha reclassificada como sucesso")
+            self.db.execute("""UPDATE signals SET status=?,close_price=?,resolution_reason=?,
+                highest_target_hit=? WHERE id=?""", (status, price, reason, reached, signal["id"]))
+            failed_event = self.db.execute("""SELECT id FROM signal_events WHERE signal_id=?
+                AND event_type='FAILED' ORDER BY id DESC LIMIT 1""", (signal["id"],)).fetchone()
+            if failed_event:
+                self.db.execute("UPDATE signal_events SET event_type=?,message=?,price=? WHERE id=?",
+                                (status, reason, price, failed_event[0]))
+            else:
+                self._event(signal["id"], status, reason, price)
 
     def save_candidates(self, candidates):
         payload = [{

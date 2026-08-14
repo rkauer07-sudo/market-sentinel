@@ -45,6 +45,19 @@ def test_same_candle_target_counts_as_success_even_if_stop_is_also_hit(tmp_path)
     resolved = store.reconcile(op.market, "1h", candles)[0]
     assert resolved["status"] == "SUCCESS_T4"
     assert "Bateu alvo 4" in resolved["resolution_reason"]
+    assert store.signal_stats()["success_rate"] == 100.0
+    store.close()
+
+
+def test_target_then_later_stop_counts_in_concretization_rate(tmp_path):
+    store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
+    assert store.reconcile(op.market, "1h", [Candle(100, 100, 105.5, 99, 105, 1)]) == []
+    assert store.signal_stats()["resolved"] == 0
+    resolved = store.reconcile(op.market, "1h", [
+        Candle(100, 100, 105.5, 99, 105, 1), Candle(200, 105, 105.2, 94, 96, 1)])[0]
+    assert resolved["status"] == "SUCCESS_T1"
+    assert store.signal_stats() == {
+        "counts": {"SUCCESS_T1": 1}, "resolved": 1, "wins": 1, "success_rate": 100.0}
     store.close()
 
 
@@ -88,3 +101,16 @@ def test_audit_reclassifies_failed_signal_that_touched_target(tmp_path):
     assert repaired["status"] == "SUCCESS_T1"
     assert store.events()[0]["event_type"] == "SUCCESS_T1"
     store.close()
+
+
+def test_persisted_favorable_move_repairs_concretization_count(tmp_path):
+    path = tmp_path / "signals.db"; store = Store(str(path)); op = opportunity(); signal_id, _ = store.register_signal(op)
+    target2_pct = abs(op.target2 - op.entry) / op.entry * 100
+    store.db.execute("""UPDATE signals SET status='FAILED',closed_at=300,
+        max_favorable_pct=? WHERE id=?""", (target2_pct, signal_id))
+    store._event(signal_id, "FAILED", "Classificação antiga", op.stop); store.db.commit(); store.close()
+    repaired = Store(str(path))
+    assert repaired.signal(signal_id)["status"] == "SUCCESS_T2"
+    assert repaired.signal_stats()["wins"] == 1
+    assert repaired.signal_stats()["success_rate"] == 100.0
+    repaired.close()
