@@ -62,6 +62,15 @@ class Store:
         self._ensure_column("signals", "target3", "REAL")
         self._ensure_column("signals", "target4", "REAL")
         self._ensure_column("signals", "target5", "REAL")
+        self._ensure_column("signals", "highest_target_hit", "INTEGER NOT NULL DEFAULT 0")
+        expired = self.db.execute("SELECT id FROM signals WHERE status='EXPIRED'").fetchall()
+        for (signal_id,) in expired:
+            self.db.execute("""UPDATE signals SET status='ACTIVE',closed_at=NULL,close_price=NULL,
+                resolution_reason=NULL WHERE id=?""", (signal_id,))
+            self.db.execute("""UPDATE signal_events SET event_type='REACTIVATED',
+                message='Oportunidade reativada; não há mais expiração por quantidade de candles',price=NULL
+                WHERE id=(SELECT id FROM signal_events WHERE signal_id=? AND event_type='EXPIRED'
+                ORDER BY id DESC LIMIT 1)""", (signal_id,))
         self.db.commit()
 
     def save_candidates(self, candidates):
@@ -126,42 +135,62 @@ class Store:
         self.db.commit()
         return signal_id, True
 
-    def reconcile(self, market, timeframe: str, candles, expiry_bars: int) -> list[dict]:
+    @staticmethod
+    def _hits(signal: dict, candle) -> tuple[bool, list[tuple[int, float]]]:
+        if signal["direction"] == "LONG":
+            stop_hit = candle.low <= signal["stop"]
+            targets = [(number, signal[f"target{number}"]) for number in range(1, 6)
+                       if signal.get(f"target{number}") is not None
+                       and candle.high >= signal[f"target{number}"]]
+        else:
+            stop_hit = candle.high >= signal["stop"]
+            targets = [(number, signal[f"target{number}"]) for number in range(1, 6)
+                       if signal.get(f"target{number}") is not None
+                       and candle.low <= signal[f"target{number}"]]
+        return stop_hit, targets
+
+    @staticmethod
+    def _final_target_number(signal: dict) -> int:
+        return max(number for number in range(1, 6) if signal.get(f"target{number}") is not None)
+
+    def reconcile(self, market, timeframe: str, candles) -> list[dict]:
         columns = self._signal_columns()
         rows = self.db.execute("""SELECT * FROM signals WHERE venue=? AND symbol=?
             AND timeframe=? AND status='ACTIVE'""", (market.venue, market.symbol, timeframe)).fetchall()
         resolutions = []
         for values in rows:
             signal = dict(zip(columns, values))
-            # Stop and targets must be tracked intrabar. Entry analysis remains
-            # based on closed candles, but lifecycle monitoring includes the
-            # current forming candle so a hit is not hidden for up to 1h/4h/1d.
             observed = [c for c in candles if c.timestamp >= signal["candle_timestamp"]]
-            closed_observed = [c for c in candles[:-1] if c.timestamp >= signal["candle_timestamp"]]
-            if not observed: continue
+            if not observed:
+                continue
             entry = signal["entry"]
             status = reason = price = None
             used = observed
+            highest_target = int(signal.get("highest_target_hit") or 0)
+            final_target = self._final_target_number(signal)
             for index, candle in enumerate(observed):
-                if signal["direction"] == "LONG":
-                    stop_hit = candle.low <= signal["stop"]
-                    hit_targets = [(number, signal[f"target{number}"]) for number in range(1, 6)
-                                   if signal.get(f"target{number}") is not None
-                                   and candle.high >= signal[f"target{number}"]]
-                else:
-                    stop_hit = candle.high >= signal["stop"]
-                    hit_targets = [(number, signal[f"target{number}"]) for number in range(1, 6)
-                                   if signal.get(f"target{number}") is not None
-                                   and candle.low <= signal[f"target{number}"]]
-                # Reaching any target makes the opportunity a success, even if
-                # the same candle or a later move also reaches the stop.
+                stop_hit, hit_targets = self._hits(signal, candle)
                 if hit_targets:
-                    target_number, price = hit_targets[-1]
-                    status = f"SUCCESS_T{target_number}"
-                    reason = f"Bateu alvo {target_number}; oportunidade considerada sucesso"
+                    new_highest = hit_targets[-1][0]
+                    for target_number, target_price in hit_targets:
+                        if highest_target < target_number < final_target:
+                            self._event(signal["id"], f"TARGET_T{target_number}",
+                                f"Bateu alvo {target_number}; sinal segue ativo até alvo final ou stop",
+                                target_price)
+                    highest_target = max(highest_target, new_highest)
+                if highest_target >= final_target:
+                    status, price = f"SUCCESS_T{final_target}", signal[f"target{final_target}"]
+                    reason = (f"Bateu alvo {final_target} (lucro final); "
+                              "oportunidade considerada sucesso")
                 elif stop_hit:
-                    status, price = "FAILED", signal["stop"]
-                    reason = "Stop/invalidação atingido sem nenhum alvo alcançado"
+                    price = signal["stop"]
+                    if highest_target:
+                        status = f"SUCCESS_T{highest_target}"
+                        reason = (f"Bateu alvo {highest_target} e depois atingiu o stop; "
+                                  "oportunidade considerada sucesso")
+                    else:
+                        status = "FAILED"
+                        reason = "Stop/invalidação atingido sem nenhum alvo alcançado"
                 if status:
                     used = observed[:index + 1]
                     break
@@ -171,21 +200,56 @@ class Store:
             else:
                 favorable = (entry - min(c.low for c in used)) / entry * 100
                 adverse = (max(c.high for c in used) - entry) / entry * 100
-            self.db.execute("UPDATE signals SET max_favorable_pct=?, max_adverse_pct=? WHERE id=?",
-                            (max(favorable, signal["max_favorable_pct"]), max(adverse, signal["max_adverse_pct"]), signal["id"]))
-            if not status and len(closed_observed) >= expiry_bars:
-                status, price = "EXPIRED", closed_observed[-1].close
-                reason = f"Expirada após {expiry_bars} candles sem atingir alvo ou stop"
+            self.db.execute("""UPDATE signals SET max_favorable_pct=?,max_adverse_pct=?,
+                highest_target_hit=? WHERE id=?""",
+                (max(favorable, signal["max_favorable_pct"]), max(adverse, signal["max_adverse_pct"]),
+                 highest_target, signal["id"]))
             if status:
-                self.db.execute("""UPDATE signals SET status=?,closed_at=?,close_price=?,resolution_reason=? WHERE id=?""",
-                                (status, int(time.time()), price, reason, signal["id"]))
+                closed_at = int(time.time())
+                self.db.execute("""UPDATE signals SET status=?,closed_at=?,close_price=?,
+                    resolution_reason=? WHERE id=?""", (status, closed_at, price, reason, signal["id"]))
                 self._event(signal["id"], status, reason, price)
-                signal.update(status=status, closed_at=int(time.time()), close_price=price,
-                              resolution_reason=reason, max_favorable_pct=max(favorable, signal["max_favorable_pct"]),
-                              max_adverse_pct=max(adverse, signal["max_adverse_pct"]))
+                signal.update(status=status, closed_at=closed_at, close_price=price,
+                    resolution_reason=reason, highest_target_hit=highest_target,
+                    max_favorable_pct=max(favorable, signal["max_favorable_pct"]),
+                    max_adverse_pct=max(adverse, signal["max_adverse_pct"]))
                 resolutions.append(signal)
         self.db.commit()
         return resolutions
+
+    def audit_failed_signal(self, signal_id: int, candles) -> dict | None:
+        signal = self.signal(signal_id)
+        if not signal or signal["status"] != "FAILED":
+            return None
+        observed = [c for c in candles
+                    if signal["candle_timestamp"] <= c.timestamp <= signal["closed_at"]]
+        highest_target = 0
+        final_target = self._final_target_number(signal)
+        for candle in observed:
+            stop_hit, hit_targets = self._hits(signal, candle)
+            if hit_targets:
+                highest_target = max(highest_target, hit_targets[-1][0])
+            if highest_target >= final_target or stop_hit:
+                break
+        if not highest_target:
+            return None
+        status = f"SUCCESS_T{highest_target}"
+        target_price = signal[f"target{highest_target}"]
+        reason = (f"Auditoria: bateu alvo {highest_target} antes ou no mesmo candle do stop; "
+                  "falha reclassificada como sucesso")
+        self.db.execute("""UPDATE signals SET status=?,close_price=?,resolution_reason=?,
+            highest_target_hit=? WHERE id=?""", (status, target_price, reason, highest_target, signal_id))
+        failed_event = self.db.execute("""SELECT id FROM signal_events WHERE signal_id=?
+            AND event_type='FAILED' ORDER BY id DESC LIMIT 1""", (signal_id,)).fetchone()
+        if failed_event:
+            self.db.execute("UPDATE signal_events SET event_type=?,message=?,price=? WHERE id=?",
+                            (status, reason, target_price, failed_event[0]))
+        else:
+            self._event(signal_id, status, reason, target_price)
+        self.db.commit()
+        signal.update(status=status, close_price=target_price, resolution_reason=reason,
+                      highest_target_hit=highest_target)
+        return signal
 
     def signals(self, status: str | None = None, limit: int = 200) -> list[dict]:
         columns = self._signal_columns()

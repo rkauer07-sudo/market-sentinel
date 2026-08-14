@@ -6,13 +6,12 @@ from market_sentinel.analysis import fibonacci_targets
 def opportunity(direction="LONG"):
     market = Market("test", "BTC", "BTC", "USDC", "PERP", AssetClass.CRYPTO, 1_000_000)
     if direction == "LONG":
-        entry, stop, target1, target2 = 100, 95, 110, 120
+        entry, stop = 100, 95
     else:
-        entry, stop, target1, target2 = 100, 105, 90, 80
-    step = 1 if direction == "LONG" else -1
-    return Opportunity(market, "1h", direction, "teste", entry, stop, target1, target2,
-                       entry + step * 15, entry + step * 17.5, entry + step * 20,
-                       2, 80, ["teste"], [], 100)
+        entry, stop = 100, 105
+    targets = fibonacci_targets(entry, stop, direction)
+    return Opportunity(market, "1h", direction, "teste", entry, stop, *targets,
+                       2.618, 80, ["teste"], [], 100)
 
 
 def test_fibonacci_targets_for_long_and_short():
@@ -29,32 +28,32 @@ def test_signal_stays_active_when_setup_disappears(tmp_path):
     store.close()
 
 
-def test_target_resolves_signal_and_creates_visual_event(tmp_path):
+def test_intermediate_target_is_logged_but_signal_stays_active(tmp_path):
     store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
-    candles = [Candle(100, 100, 102, 99, 101, 1), Candle(200, 101, 111, 100, 109, 1),
-               Candle(300, 109, 112, 108, 111, 1)]
-    resolved = store.reconcile(op.market, "1h", candles, 24)
-    assert resolved[0]["status"] == "SUCCESS_T1"
-    assert store.events()[0]["event_type"] == "SUCCESS_T1"
+    candles = [Candle(100, 100, 102, 99, 101, 1), Candle(200, 101, 105.5, 100, 105, 1)]
+    resolved = store.reconcile(op.market, "1h", candles)
+    assert resolved == []
+    assert store.signals("ACTIVE")[0]["highest_target_hit"] == 1
+    assert store.events()[0]["event_type"] == "TARGET_T1"
     store.close()
 
 
 def test_same_candle_target_counts_as_success_even_if_stop_is_also_hit(tmp_path):
     store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
-    candles = [Candle(100, 100, 102, 99, 101, 1), Candle(200, 101, 112, 94, 106, 1),
+    candles = [Candle(100, 100, 102, 99, 101, 1), Candle(200, 101, 111, 94, 106, 1),
                Candle(300, 106, 107, 105, 106, 1)]
-    resolved = store.reconcile(op.market, "1h", candles, 24)[0]
-    assert resolved["status"] == "SUCCESS_T1"
-    assert resolved["resolution_reason"] == "Bateu alvo 1; oportunidade considerada sucesso"
+    resolved = store.reconcile(op.market, "1h", candles)[0]
+    assert resolved["status"] == "SUCCESS_T4"
+    assert "Bateu alvo 4" in resolved["resolution_reason"]
     store.close()
 
 
 def test_highest_fibonacci_target_hit_is_recorded(tmp_path):
     store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
     candles = [Candle(100, 100, 121, 99, 119, 1), Candle(200, 119, 120, 118, 119, 1)]
-    resolved = store.reconcile(op.market, "1h", candles, 24)[0]
+    resolved = store.reconcile(op.market, "1h", candles)[0]
     assert resolved["status"] == "SUCCESS_T5"
-    assert resolved["resolution_reason"] == "Bateu alvo 5; oportunidade considerada sucesso"
+    assert "lucro final" in resolved["resolution_reason"]
     assert store.signal_stats()["wins"] == 1
     store.close()
 
@@ -64,7 +63,28 @@ def test_forming_candle_stop_closes_signal_immediately(tmp_path):
     candles = [Candle(100, 100, 102, 99, 101, 1),
                Candle(200, 101, 103, 100, 102, 1),
                Candle(300, 102, 103, 94, 96, 1)]  # current/forming candle
-    resolved = store.reconcile(op.market, "1h", candles, 24)
+    resolved = store.reconcile(op.market, "1h", candles)
     assert resolved[0]["status"] == "FAILED"
     assert store.signals("ACTIVE") == []
+    store.close()
+
+
+def test_expired_signal_is_reactivated_on_migration(tmp_path):
+    path = tmp_path / "signals.db"; store = Store(str(path)); op = opportunity(); signal_id, _ = store.register_signal(op)
+    store.db.execute("UPDATE signals SET status='EXPIRED',closed_at=200,close_price=101 WHERE id=?", (signal_id,))
+    store._event(signal_id, "EXPIRED", "Expirada", 101); store.db.commit(); store.close()
+    reopened = Store(str(path))
+    assert reopened.signal(signal_id)["status"] == "ACTIVE"
+    assert reopened.events()[0]["event_type"] == "REACTIVATED"
+    reopened.close()
+
+
+def test_audit_reclassifies_failed_signal_that_touched_target(tmp_path):
+    store = Store(str(tmp_path / "signals.db")); op = opportunity(); signal_id, _ = store.register_signal(op)
+    store.db.execute("UPDATE signals SET status='FAILED',closed_at=300 WHERE id=?", (signal_id,))
+    store._event(signal_id, "FAILED", "Stop antigo", op.stop); store.db.commit()
+    candles = [Candle(100, 100, 102, 99, 101, 1), Candle(200, 101, 106, 94, 100, 1)]
+    repaired = store.audit_failed_signal(signal_id, candles)
+    assert repaired["status"] == "SUCCESS_T1"
+    assert store.events()[0]["event_type"] == "SUCCESS_T1"
     store.close()

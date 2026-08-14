@@ -28,10 +28,6 @@ analysis:
   retest_min_bars: 2
   retest_max_bars: 3
   alert_cooldown_hours: 12
-  expiry_bars:
-    1h: 24
-    4h: 12
-    1d: 5
 runtime:
   scan_interval_seconds: 60
   market_refresh_hours: 6

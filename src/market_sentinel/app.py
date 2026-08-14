@@ -62,8 +62,7 @@ class Sentinel:
             async with semaphore:
                 try:
                     candles = await adapter.candles(market, timeframe, max(260, int(self.settings.analysis["min_candles"]) + 5))
-                    expiry = int(self.settings.analysis.get("expiry_bars", {}).get(timeframe, 12))
-                    resolutions.extend(self.store.reconcile(market, timeframe, candles, expiry))
+                    resolutions.extend(self.store.reconcile(market, timeframe, candles))
                     opportunity = analyze(market, timeframe, candles, regime, self.settings.analysis)
                     candidate = None if opportunity else analyze_potential(
                         market, timeframe, candles, regime, self.settings.analysis, btc_change_30d)
@@ -99,6 +98,35 @@ class Sentinel:
                 except Exception:
                     log.exception("Falha ao enviar resolução ao Telegram; snapshot será preservado")
         return opportunities
+
+    async def audit_failures(self) -> list[dict]:
+        """Recheck failed signals and repair any that touched a target before stop."""
+        if not self.markets:
+            await self.refresh_markets()
+        market_map = {(market.venue, market.symbol): (adapter, market)
+                      for adapter, market in self.markets}
+        repaired = []
+        for signal in self.store.signals("FAILED", 500):
+            match = market_map.get((signal["venue"], signal["symbol"]))
+            if not match:
+                log.warning("AUDITORIA sem mercado %s:%s", signal["venue"], signal["symbol"])
+                continue
+            adapter, market = match
+            seconds = {"1h": 3600, "4h": 14400, "1d": 86400}[signal["timeframe"]]
+            age_bars = max(10, int((time.time() - signal["candle_timestamp"]) / seconds) + 5)
+            try:
+                candles = await adapter.candles(market, signal["timeframe"], min(age_bars, 1000))
+                correction = self.store.audit_failed_signal(signal["id"], candles)
+            except Exception:
+                log.exception("AUDITORIA falhou para %s:%s", signal["venue"], signal["symbol"])
+                continue
+            if correction:
+                repaired.append(correction)
+                log.info("AUDITORIA CORRIGIDA %s:%s %s", signal["venue"], signal["symbol"],
+                         correction["resolution_reason"])
+            else:
+                log.info("AUDITORIA MANTIDA %s:%s FAILED", signal["venue"], signal["symbol"])
+        return repaired
 
     async def run_forever(self):
         log.info("Market Sentinel iniciado (Telegram: %s)", "configurado" if self.notifier.configured else "desativado")

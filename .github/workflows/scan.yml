@@ -49,6 +49,8 @@ jobs:
       - name: Monitor continuously
         shell: bash
         run: |
+          market-sentinel audit-failures
+
           deadline=$((SECONDS + 4200))
           failures=0
 
