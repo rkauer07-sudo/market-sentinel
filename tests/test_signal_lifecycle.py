@@ -114,3 +114,17 @@ def test_persisted_favorable_move_repairs_concretization_count(tmp_path):
     assert repaired.signal_stats()["wins"] == 1
     assert repaired.signal_stats()["success_rate"] == 100.0
     repaired.close()
+
+
+def test_full_reset_is_destructive_but_runs_only_once(tmp_path):
+    path = tmp_path / "signals.db"; store = Store(str(path)); op = opportunity(); store.register_signal(op)
+    store.db.execute("DELETE FROM migrations WHERE name='full_production_reset_2026_08_14_v1'")
+    store.db.commit(); store.close()
+    reset = Store(str(path))
+    assert reset.signals() == []
+    assert reset.events() == []
+    assert reset.signal_stats() == {"counts": {}, "resolved": 0, "wins": 0, "success_rate": None}
+    reset.register_signal(op); reset.close()
+    reopened = Store(str(path))
+    assert len(reopened.signals()) == 1
+    reopened.close()

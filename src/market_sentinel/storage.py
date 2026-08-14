@@ -54,6 +54,9 @@ class Store:
         CREATE TABLE IF NOT EXISTS candidate_snapshots (
           id INTEGER PRIMARY KEY CHECK (id=1), updated_at INTEGER NOT NULL, payload_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS migrations (
+          name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL
+        );
         """)
         self._ensure_column("signals", "reasons_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("signals", "risks_json", "TEXT NOT NULL DEFAULT '[]'")
@@ -72,7 +75,20 @@ class Store:
                 WHERE id=(SELECT id FROM signal_events WHERE signal_id=? AND event_type='EXPIRED'
                 ORDER BY id DESC LIMIT 1)""", (signal_id,))
         self._repair_legacy_successes()
+        self._reset_all_history_once()
         self.db.commit()
+
+    def _reset_all_history_once(self):
+        migration = "full_production_reset_2026_08_14_v1"
+        if self.db.execute("SELECT 1 FROM migrations WHERE name=?", (migration,)).fetchone():
+            return
+        self.db.execute("DELETE FROM signal_events")
+        self.db.execute("DELETE FROM signals")
+        self.db.execute("DELETE FROM alerts")
+        self.db.execute("DELETE FROM runs")
+        self.db.execute("DELETE FROM candidate_snapshots")
+        self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('signals','signal_events')")
+        self.db.execute("INSERT INTO migrations(name,applied_at) VALUES(?,?)", (migration, int(time.time())))
 
     def _repair_legacy_successes(self):
         """Use persisted maximum favorable movement to fix pre-migration failures."""
