@@ -73,8 +73,18 @@ class Sentinel:
 
         log.info("Radar ativo: %d de %d mercados", len(active_markets), len(self.markets))
         results = await asyncio.gather(*(inspect(a, m, tf) for a, m in active_markets for tf in self.settings.timeframes))
-        opportunities = sorted((x[0] for x in results if x[0]), key=lambda x: x.score, reverse=True)
-        self.last_candidates = sorted((x[1] for x in results if x[1]), key=lambda x: x.readiness, reverse=True)[:80]
+        ranked = sorted((x[0] for x in results if x[0]), key=lambda x: x.score, reverse=True)
+        # Avoid correlated duplicate exposure: keep only the strongest venue/timeframe
+        # for each underlying asset in a scan.
+        opportunities, selected_assets = [], set()
+        for opportunity in ranked:
+            asset = opportunity.market.base.upper().replace("-PERP", "")
+            if asset in selected_assets:
+                continue
+            selected_assets.add(asset)
+            opportunities.append(opportunity)
+        candidates = (x[1] for x in results if x[1] and x[1].readiness >= 70)
+        self.last_candidates = sorted(candidates, key=lambda x: x.readiness, reverse=True)[:24]
         self.store.save_candidates(self.last_candidates)
         for op in opportunities:
             _, created = self.store.register_signal(op)

@@ -13,15 +13,17 @@ core_assets:
   - ZRO
   - LINK
 
-timeframes: [1h, 4h, 1d]
+timeframes: [4h, 1d]
 analysis:
   min_candles: 210
   min_risk_reward: 2.0
-  min_score: 75
-  strong_score: 85
-  min_confirmations: 6
+  min_score: 90
+  strong_score: 92
+  min_confirmations: 8
+  min_breakout_volume_ratio: 1.5
+  min_retest_volume_ratio: 1.2
   potential_zone_atr: 0.65
-  min_daily_quote_volume: 500000
+  min_daily_quote_volume: 1000000
   max_spread_pct: 0.30
   pivot_window: 3
   zone_tolerance_atr: 0.35

@@ -57,3 +57,17 @@ def test_retest_after_third_candle_is_too_late():
     rows += [Candle(i, 102, 104, 101, 103, 100) for i in range(21, 24)]
     rows += [Candle(24, 101, 103, 99.8, 102.5, 120)]
     assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None
+
+
+def test_retest_requires_confirmation_volume():
+    rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
+    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 102, 104, 101, 103, 100),
+             Candle(22, 101, 103, 99.8, 102.5, 80)]
+    assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None
+
+
+def test_retest_requires_decisive_rejection_body():
+    rows = [Candle(i, 99, 100, 98, 99, 100) for i in range(20)]
+    rows += [Candle(20, 99, 103, 99, 102, 200), Candle(21, 102, 104, 101, 103, 100),
+             Candle(22, 102.3, 103, 99.8, 102.5, 130)]
+    assert confirmed_breakout_retest(rows, [100], "LONG", 2) is None

@@ -45,7 +45,8 @@ def fibonacci_targets(entry: float, stop: float, direction: str) -> tuple[float,
 
 def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direction: str,
                               current_atr: float, min_bars: int = 2,
-                              max_bars: int = 3) -> float | None:
+                              max_bars: int = 3, min_breakout_volume: float = 1.5,
+                              min_retest_volume: float = 1.2) -> float | None:
     """Find a breakout retested and rejected 2-3 closed candles later."""
     if len(candles) < 3 or not levels:
         return None
@@ -61,18 +62,21 @@ def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direct
         breakout, previous = candles[index], candles[index - 1]
         history = candles[max(0, index - 20):index]
         avg_volume = fmean(c.volume for c in history) if history else 0
-        volume_ok = bool(avg_volume and breakout.volume / avg_volume >= 1.5)
+        volume_ok = bool(avg_volume and breakout.volume / avg_volume >= min_breakout_volume
+                         and confirmation.volume / avg_volume >= min_retest_volume)
+        candle_range = max(confirmation.high - confirmation.low, 1e-12)
+        body_ratio = abs(confirmation.close - confirmation.open) / candle_range
         for level in levels:
             if direction == "LONG":
                 broke = previous.close <= level < breakout.close
                 retested = confirmation.low <= level + tolerance and confirmation.close > level
-                rejected = confirmation.close > confirmation.open and confirmation.close >= (
-                    confirmation.low + .55 * (confirmation.high - confirmation.low))
+                rejected = confirmation.close > confirmation.open and body_ratio >= .35 and \
+                    confirmation.close >= confirmation.low + .65 * candle_range
             else:
                 broke = previous.close >= level > breakout.close
                 retested = confirmation.high >= level - tolerance and confirmation.close < level
-                rejected = confirmation.close < confirmation.open and confirmation.close <= (
-                    confirmation.low + .45 * (confirmation.high - confirmation.low))
+                rejected = confirmation.close < confirmation.open and body_ratio >= .35 and \
+                    confirmation.close <= confirmation.low + .35 * candle_range
             if broke and volume_ok and retested and rejected:
                 matches.append((index, level))
     return max(matches, key=lambda item: item[0])[1] if matches else None
@@ -96,14 +100,16 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     setup = direction = None
     retest_min_bars = int(cfg.get("retest_min_bars", 2))
     retest_max_bars = int(cfg.get("retest_max_bars", 3))
+    breakout_volume = float(cfg.get("min_breakout_volume_ratio", 1.5))
+    retest_volume = float(cfg.get("min_retest_volume_ratio", 1.2))
     long_retest = confirmed_breakout_retest(
-        closed, highs, "LONG", current_atr, retest_min_bars, retest_max_bars)
+        closed, highs, "LONG", current_atr, retest_min_bars, retest_max_bars,
+        breakout_volume, retest_volume)
     short_retest = confirmed_breakout_retest(
-        closed, lows, "SHORT", current_atr, retest_min_bars, retest_max_bars)
+        closed, lows, "SHORT", current_atr, retest_min_bars, retest_max_bars,
+        breakout_volume, retest_volume)
     if long_retest is not None:
         setup, direction, entry, stop = "rompimento + reteste confirmado", "LONG", last.close, long_retest - current_atr
-    elif support and abs(last.low - support) <= tolerance and last.close > support and last.close > last.open and volume_ratio >= 0.8:
-        setup, direction, entry, stop = "reteste de suporte", "LONG", last.close, support - 0.8 * current_atr
     elif short_retest is not None:
         setup, direction, entry, stop = "perda + reteste confirmado", "SHORT", last.close, short_retest + current_atr
     else:
@@ -120,6 +126,10 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
          f"{vibe.macd_histogram:.6g}, EMA20 {vibe.ema20:.8g}")], []
     aligned = trend_up if direction == "LONG" else trend_down
     btc_aligned = (btc_bullish and direction == "LONG") or (not btc_bullish and direction == "SHORT")
+    # Precision-first gate: score cannot compensate for a counter-trend,
+    # counter-regime, or weak-volume signal.
+    if not aligned or not btc_aligned or volume_ratio < retest_volume:
+        return None
     breakdown = {
         "Estrutura": 15,
         "Tendência": 15 if aligned else 0,
@@ -141,7 +151,7 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     else: risks.append(f"Volume relativo ainda modesto: {volume_ratio:.1f}x")
     if market.daily_quote_volume < float(cfg["min_daily_quote_volume"]): risks.append("Liquidez diária abaixo do filtro preferencial")
     if rr < float(cfg["min_risk_reward"]) or score < int(cfg["min_score"]) or confirmations < int(cfg.get("min_confirmations", 5)): return None
-    if score >= int(cfg.get("strong_score", 85)) and (not aligned or volume_ratio < 1.5): return None
+    if score >= int(cfg.get("strong_score", 85)) and volume_ratio < retest_volume: return None
     return Opportunity(market, timeframe, direction, setup, entry, stop,
         target1, target2, target3, target4, target5, rr, score,
         reasons, risks, last.timestamp, breakdown, confirmations)

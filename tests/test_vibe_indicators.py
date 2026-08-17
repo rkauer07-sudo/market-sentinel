@@ -23,3 +23,11 @@ def test_vibe_gate_requires_directional_macd_alignment():
     assert snapshot is not None
     wrong_direction = "SHORT" if snapshot.macd_histogram > 0 else "LONG"
     assert snapshot.confirms(wrong_direction, rising[-1]) is False
+
+
+def test_vibe_gate_rejects_overextended_rsi_even_with_positive_momentum():
+    values = [100 + index * .2 for index in range(100)]
+    snapshot = technical_snapshot(values)
+    assert snapshot is not None
+    assert snapshot.rsi > 65
+    assert snapshot.confirms("LONG", values[-1]) is False

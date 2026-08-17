@@ -70,12 +70,15 @@ class VibeSnapshot:
     bollinger_upper: float
     bollinger_middle: float
     bollinger_lower: float
+    ema20_previous: float
 
     def confirms(self, direction: str, close: float) -> bool:
         if direction == "LONG":
-            return 45 <= self.rsi <= 70 and self.macd_histogram > 0 and \
+            return 50 <= self.rsi <= 65 and self.macd_histogram > 0 and \
+                self.macd_line > self.macd_signal and self.ema20 > self.ema20_previous and \
                 close > self.ema20 and close < self.bollinger_upper
-        return 30 <= self.rsi <= 55 and self.macd_histogram < 0 and \
+        return 35 <= self.rsi <= 50 and self.macd_histogram < 0 and \
+            self.macd_line < self.macd_signal and self.ema20 < self.ema20_previous and \
             close < self.ema20 and close > self.bollinger_lower
 
 
@@ -84,4 +87,7 @@ def technical_snapshot(values: list[float]) -> VibeSnapshot | None:
     macd_values, bands = macd(values), bollinger(values)
     if rsi_value is None or ema20 is None or macd_values is None or bands is None:
         return None
-    return VibeSnapshot(rsi_value, ema20, *macd_values, *bands)
+    ema20_previous = ema(values[:-1], 20)
+    if ema20_previous is None:
+        return None
+    return VibeSnapshot(rsi_value, ema20, *macd_values, *bands, ema20_previous)
