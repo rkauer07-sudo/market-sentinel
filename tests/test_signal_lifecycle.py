@@ -155,3 +155,11 @@ def test_full_reset_is_destructive_but_runs_only_once(tmp_path):
     reopened = Store(str(path))
     assert len(reopened.signals()) == 1
     reopened.close()
+
+
+def test_operational_logs_tolerate_a_warm_instance_with_old_schema(tmp_path):
+    store = Store(str(tmp_path / "signals.db"))
+    store.db.execute("DROP TABLE operational_logs")
+    store.db.commit()
+    assert store.operational_logs() == []
+    store.close()

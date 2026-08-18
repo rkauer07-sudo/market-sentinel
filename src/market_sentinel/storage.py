@@ -113,8 +113,13 @@ class Store:
         self.db.commit()
 
     def operational_logs(self, limit: int = 300) -> list[str]:
-        rows = self.db.execute("""SELECT created_at,level,message FROM operational_logs
-            ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
+        try:
+            rows = self.db.execute("""SELECT created_at,level,message FROM operational_logs
+                ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
+        except sqlite3.OperationalError:
+            # A warm Vercel function may briefly hold the previous remote schema.
+            # Keep the dashboard API alive until the next synced snapshot arrives.
+            return []
         return [f"{time.strftime('%H:%M:%S', time.localtime(created))} · {level} · {message}"
                 for created, level, message in reversed(rows)]
 
