@@ -394,7 +394,12 @@ class Store:
         return headers
 
     def _download_remote(self):
-        response = httpx.get(self._remote_object_url(), headers=self._remote_headers(), timeout=30)
+        response = httpx.get(
+            self._remote_object_url(),
+            params={"snapshot": str(time.time_ns())},
+            headers={**self._remote_headers(), "Cache-Control": "no-cache, no-store"},
+            timeout=30,
+        )
         detail = response.text[:500]
         # Supabase Storage may encode a missing bucket/object as HTTP 400 with
         # an internal 404 status. An empty first run is valid and creates DB locally.

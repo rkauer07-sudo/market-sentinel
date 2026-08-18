@@ -149,7 +149,10 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             # the request thread so closing/reopening the shared connection is safe.
             dashboard.sentinel.store.sync_from_remote()
         if request.url.path == "/health" or not (auth_user and auth_password):
-            return await call_next(request)
+            response = await call_next(request)
+            if request.url.path.startswith("/api/"):
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return response
         header = request.headers.get("Authorization", "")
         try:
             scheme, encoded = header.split(" ", 1)
@@ -160,7 +163,16 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             hmac.compare_digest(supplied_password, auth_password)
         if not valid:
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Market Sentinel"'})
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return response
+
+    def require_writer():
+        """Only the scheduled worker may mutate the authoritative snapshot."""
+        store = dashboard.sentinel.store
+        if store.remote_url and store.remote_key and not store.upload_remote:
+            raise HTTPException(409, "Monitor gerenciado pela rotina central; painel em modo somente leitura")
 
     @app.get("/health", include_in_schema=False)
     async def health(): return {"status": "ok"}
@@ -194,13 +206,18 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         return status_payload()
 
     @app.post("/api/start")
-    async def start(): return {"started": dashboard.start(), "running": dashboard.running}
+    async def start():
+        require_writer()
+        return {"started": dashboard.start(), "running": dashboard.running}
 
     @app.post("/api/stop")
-    async def stop(): return {"stopped": await dashboard.stop(), "running": dashboard.running}
+    async def stop():
+        require_writer()
+        return {"stopped": await dashboard.stop(), "running": dashboard.running}
 
     @app.post("/api/scan")
     async def scan():
+        require_writer()
         await dashboard.scan()
         return dashboard.sentinel.store.signals("ACTIVE")
 
@@ -242,16 +259,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         results = await asyncio.gather(*(quote(a, m) for a, m in matches))
         valid = [x for x in results if x]
         dashboard.price_cache = {key: price for key, price, _, _ in valid}
-        active_timeframes: dict[tuple[str, str], set[str]] = {}
-        for signal in active:
-            active_timeframes.setdefault((signal["venue"], signal["symbol"]), set()).add(signal["timeframe"])
-        # Use a point-in-time price so highs/lows recorded before signal creation
-        # cannot make qualified cards close and reappear between scans.
-        for _, price, market, _ in valid:
-            current = float(price["price"])
-            live_point = Candle(int(time.time()), current, current, current, current, 0)
-            for timeframe in active_timeframes.get((market.venue, market.symbol), ()):
-                dashboard.sentinel.store.reconcile(market, timeframe, [live_point])
+        # This GET endpoint must never mutate a serverless instance's local DB.
+        # Reconciliation belongs exclusively to the scheduled scanner.
         dashboard.price_cache_at = time.time()
         return dashboard.price_cache
 
