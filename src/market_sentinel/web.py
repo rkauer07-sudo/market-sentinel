@@ -255,6 +255,16 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     async def signal_events(limit: int = 300):
         return dashboard.sentinel.store.events(min(limit, 500))
 
+    @app.get("/api/dashboard-snapshot")
+    async def dashboard_snapshot():
+        """One coherent lifecycle view; avoids mixing serverless instances."""
+        return {
+            "version": dashboard.sentinel.store.snapshot_updated_at() or 0,
+            "lifecycle": dashboard.sentinel.store.signal_stats(),
+            "signals": dashboard.sentinel.store.signals(limit=200),
+            "events": dashboard.sentinel.store.events(300),
+        }
+
     @app.get("/api/signals/{signal_id}/chart")
     async def signal_chart(signal_id: int):
         signal = dashboard.sentinel.store.signal(signal_id)
