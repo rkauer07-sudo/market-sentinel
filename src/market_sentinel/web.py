@@ -290,6 +290,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 if resolution:
                     resolutions.append(resolution)
         dashboard.price_cache["__resolutions"] = resolutions
+        dashboard.price_cache["__active_ids"] = [signal["id"] for signal in active]
+        dashboard.price_cache["__lifecycle"] = dashboard.sentinel.store.signal_stats()
         # This GET endpoint must never mutate a serverless instance's local DB.
         # Reconciliation belongs exclusively to the scheduled scanner.
         dashboard.price_cache_at = time.time()

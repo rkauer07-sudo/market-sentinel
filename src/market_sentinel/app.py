@@ -5,7 +5,7 @@ import time
 import httpx
 from .analysis import analyze, analyze_potential, btc_regime
 from .config import Settings
-from .models import AssetClass, Market
+from .models import AssetClass, Candle, Market
 from .storage import Store
 from .telegram import TelegramNotifier
 from .venues import ArcusAdapter, BackpackAdapter, HyperliquidAdapter, NadoAdapter
@@ -67,6 +67,12 @@ class Sentinel:
                     # The live-price endpoint handles the forming candle from
                     # point-in-time prices so pre-signal highs/lows cannot close it.
                     resolutions.extend(self.store.reconcile(market, timeframe, candles[:-1]))
+                    # The central worker is the only writer. Reconcile the
+                    # current point price too, without reusing the forming
+                    # candle's pre-signal high/low range.
+                    current = float(candles[-1].close)
+                    live_point = Candle(int(time.time()), current, current, current, current, 0)
+                    resolutions.extend(self.store.reconcile(market, timeframe, [live_point]))
                     crypto_regime = regime if market.asset_class == AssetClass.CRYPTO else None
                     crypto_change = btc_change_30d if market.asset_class == AssetClass.CRYPTO else None
                     opportunity = analyze(market, timeframe, candles, crypto_regime, self.settings.analysis)

@@ -11,7 +11,9 @@ on:
 
 concurrency:
   group: market-scan
-  cancel-in-progress: false
+  # A deployment must replace the old worker immediately. Scheduled handoffs
+  # remain queued and never interrupt the active writer.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   scan:
