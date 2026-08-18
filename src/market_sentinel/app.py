@@ -5,10 +5,10 @@ import time
 import httpx
 from .analysis import analyze, analyze_potential, btc_regime
 from .config import Settings
-from .models import Market
+from .models import AssetClass, Market
 from .storage import Store
 from .telegram import TelegramNotifier
-from .venues import BackpackAdapter, HyperliquidAdapter, NadoAdapter
+from .venues import ArcusAdapter, BackpackAdapter, HyperliquidAdapter, NadoAdapter
 
 log = logging.getLogger(__name__)
 
@@ -19,7 +19,8 @@ class Sentinel:
         self.client = httpx.AsyncClient(timeout=30, headers={"User-Agent": "market-sentinel/0.1"})
         self.adapters = [HyperliquidAdapter(self.client, settings.core_assets),
                          BackpackAdapter(self.client, settings.core_assets),
-                         NadoAdapter(self.client, settings.core_assets)]
+                         NadoAdapter(self.client, settings.core_assets),
+                         ArcusAdapter(self.client, settings.core_assets)]
         self.store = Store(settings.runtime["database_path"])
         self.notifier = TelegramNotifier(self.client, settings.telegram_token, settings.telegram_chat_id)
         self.markets: list[tuple[object, Market]] = []
@@ -34,9 +35,9 @@ class Sentinel:
                 log.error("Falha ao descobrir mercados em %s: %s", adapter.name, rows)
                 continue
             markets.extend((adapter, market) for market in rows)
-            log.info("%s: %d mercados relevantes", adapter.name, len(rows))
+            log.debug("%s: %d mercados relevantes", adapter.name, len(rows))
         self.markets = markets; self.last_refresh = time.time()
-        log.info("Universo consolidado: %d mercados", len(markets))
+        log.info("Mercados atualizados: %d ativos em %d plataformas", len(markets), len(self.adapters))
 
     async def scan_once(self):
         refresh_seconds = int(self.settings.runtime["market_refresh_hours"]) * 3600
@@ -63,16 +64,17 @@ class Sentinel:
                 try:
                     candles = await adapter.candles(market, timeframe, max(260, int(self.settings.analysis["min_candles"]) + 5))
                     resolutions.extend(self.store.reconcile(market, timeframe, candles))
-                    opportunity = analyze(market, timeframe, candles, regime, self.settings.analysis)
+                    crypto_regime = regime if market.asset_class == AssetClass.CRYPTO else None
+                    crypto_change = btc_change_30d if market.asset_class == AssetClass.CRYPTO else None
+                    opportunity = analyze(market, timeframe, candles, crypto_regime, self.settings.analysis)
                     candidate = None if opportunity else analyze_potential(
-                        market, timeframe, candles, regime, self.settings.analysis, btc_change_30d)
-                    return opportunity, candidate
+                        market, timeframe, candles, crypto_regime, self.settings.analysis, crypto_change)
+                    return opportunity, candidate, None
                 except Exception as exc:
-                    log.warning("%s %s %s: %s", market.venue, market.symbol, timeframe, exc)
-                    return None, None
+                    return None, None, f"{market.venue}:{market.symbol}:{timeframe}: {exc}"
 
-        log.info("Radar ativo: %d de %d mercados", len(active_markets), len(self.markets))
         results = await asyncio.gather(*(inspect(a, m, tf) for a, m in active_markets for tf in self.settings.timeframes))
+        failures = [x[2] for x in results if x[2]]
         ranked = sorted((x[0] for x in results if x[0]), key=lambda x: x.score, reverse=True)
         # Avoid correlated duplicate exposure: keep only the strongest venue/timeframe
         # for each underlying asset in a scan.
@@ -86,6 +88,10 @@ class Sentinel:
         candidates = (x[1] for x in results if x[1] and x[1].readiness >= 70)
         self.last_candidates = sorted(candidates, key=lambda x: x.readiness, reverse=True)[:24]
         self.store.save_candidates(self.last_candidates)
+        log.info("Varredura concluída: %d mercados, %d sinais, %d cenários, %d falhas",
+                 len(active_markets), len(opportunities), len(self.last_candidates), len(failures))
+        if failures:
+            log.debug("Falhas da varredura: %s", " | ".join(failures))
         for op in opportunities:
             _, created = self.store.register_signal(op)
             if created:

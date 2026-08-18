@@ -1,17 +1,18 @@
 # Market Sentinel
 
-Agente **read-only** que monitora mercados da Hyperliquid, Backpack e Nado, calcula oportunidades técnicas e envia alertas pelo Telegram. Ele não contém código de execução de ordens nem solicita chaves de trading.
+Agente **read-only** que monitora mercados da Hyperliquid, Backpack, Nado e Arcus, calcula oportunidades técnicas e envia alertas pelo Telegram. Ele não contém código de execução de ordens nem solicita chaves de trading.
 
 ## Universo
 
 - Criptos obrigatórias: BTC, ETH, SOL, HYPE, ZEC, BNB, NEAR, SUI, JUP, UNI, AVAX, ZRO e LINK.
 - Todas as commodities tokenizadas identificadas com segurança nas venues.
 - Todas as ações americanas tokenizadas identificadas nas venues.
+- Arcus incluída em modo somente leitura para mercados perpétuos públicos.
 - Hyperliquid HIP-3 DEXes são descobertas dinamicamente.
 
 ## Estratégia inicial
 
-Analisa candles fechados em 1h, 4h e 1d. Usa SMA 20/50/200, ATR, pivôs, zonas de suporte/resistência, rompimento/reteste, volume relativo, liquidez e regime diário do BTC. Só alerta com R:R mínimo de 2 e score mínimo de 70.
+Analisa candles fechados nos tempos configurados. Usa SMA 20/50/200, ATR, RSI, MACD, pivôs, zonas de suporte/resistência, rompimento/reteste, volume relativo e liquidez. O regime diário do BTC é aplicado somente às criptos, nunca a commodities ou ações tokenizadas.
 
 Esta heurística é um ponto de partida que precisa de backtest e calibração. Nenhum alerta é garantia de retorno ou recomendação financeira.
 

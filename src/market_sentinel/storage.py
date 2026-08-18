@@ -90,6 +90,16 @@ class Store:
         self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('signals','signal_events')")
         self.db.execute("INSERT INTO migrations(name,applied_at) VALUES(?,?)", (migration, int(time.time())))
 
+    def reset_history(self):
+        """Start a clean monitoring ledger while preserving schema migrations."""
+        self.db.execute("DELETE FROM signal_events")
+        self.db.execute("DELETE FROM signals")
+        self.db.execute("DELETE FROM alerts")
+        self.db.execute("DELETE FROM runs")
+        self.db.execute("DELETE FROM candidate_snapshots")
+        self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('signals','signal_events')")
+        self.db.commit()
+
     def _repair_legacy_successes(self):
         """Use persisted maximum favorable movement to fix pre-migration failures."""
         columns = self._signal_columns()

@@ -226,12 +226,21 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                         "price": current,
                         "change_pct": ((current / previous) - 1) * 100 if previous else 0,
                         "updated_at": int(time.time()),
-                    }
+                    }, market, candles
                 except Exception:
                     return None
 
         results = await asyncio.gather(*(quote(a, m) for a, m in matches))
-        dashboard.price_cache = dict(x for x in results if x)
+        valid = [x for x in results if x]
+        dashboard.price_cache = {key: price for key, price, _, _ in valid}
+        active_timeframes: dict[tuple[str, str], set[str]] = {}
+        for signal in active:
+            active_timeframes.setdefault((signal["venue"], signal["symbol"]), set()).add(signal["timeframe"])
+        # The 1h forming candle carries the current high/low. Reconcile active
+        # signals on every price poll, instead of waiting for the next full scan.
+        for _, _, market, candles in valid:
+            for timeframe in active_timeframes.get((market.venue, market.symbol), ()):
+                dashboard.sentinel.store.reconcile(market, timeframe, candles)
         dashboard.price_cache_at = time.time()
         return dashboard.price_cache
 
@@ -287,9 +296,10 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             ]
         risks = list(signal.get("risks", [])) + [
             "Rompimento sem volume pode ser falso e retornar rapidamente à faixa anterior.",
-            "Movimento brusco do BTC pode invalidar a estrutura das altcoins e RWAs.",
             "Slippage, spread e baixa liquidez podem piorar a entrada e o stop executável.",
         ]
+        if signal.get("asset_class") == "crypto":
+            risks.append("Mudança no regime diário do BTC pode invalidar o contexto desta cripto.")
         if not signal.get("reasons"):
             signal["reasons"] = [
                 f"Setup técnico identificado: {signal['setup']}.",

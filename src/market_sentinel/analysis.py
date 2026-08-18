@@ -82,7 +82,7 @@ def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direct
     return max(matches, key=lambda item: item[0])[1] if matches else None
 
 
-def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool, cfg: dict) -> Opportunity | None:
+def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool | None, cfg: dict) -> Opportunity | None:
     minimum = int(cfg["min_candles"])
     if len(candles) < minimum: return None
     closed = candles[:-1]  # Never act on a still-forming candle.
@@ -125,7 +125,8 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
         (f"Vibe-Trading confirmado: RSI {vibe.rsi:.1f}, MACD histograma "
          f"{vibe.macd_histogram:.6g}, EMA20 {vibe.ema20:.8g}")], []
     aligned = trend_up if direction == "LONG" else trend_down
-    btc_aligned = (btc_bullish and direction == "LONG") or (not btc_bullish and direction == "SHORT")
+    uses_btc_regime = btc_bullish is not None
+    btc_aligned = not uses_btc_regime or ((btc_bullish and direction == "LONG") or (not btc_bullish and direction == "SHORT"))
     # Precision-first gate: score cannot compensate for a counter-trend,
     # counter-regime, or weak-volume signal.
     if not aligned or not btc_aligned or volume_ratio < retest_volume:
@@ -134,7 +135,8 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
         "Estrutura": 15,
         "Tendência": 15 if aligned else 0,
         "Volume": 15 if volume_ratio >= 2 else 12 if volume_ratio >= 1.5 else 8 if volume_ratio >= 1.2 else 4 if volume_ratio >= 1 else 0,
-        "Contexto BTC": 15 if btc_aligned else 0,
+        **({"Regime diário do BTC": 15 if btc_aligned else 0} if uses_btc_regime else
+           {"Estrutura do próprio ativo": 15 if aligned else 0}),
         "Risco/retorno": 15 if rr >= 3 else 12 if rr >= 2.5 else 9 if rr >= float(cfg["min_risk_reward"]) else 0,
         "Liquidez": 10 if market.daily_quote_volume >= 5_000_000 else 8 if market.daily_quote_volume >= 1_000_000 else 6 if market.daily_quote_volume >= float(cfg["min_daily_quote_volume"]) else 0,
         "Precisão da entrada": 5 if abs(entry - ma20) <= 1.5 * current_atr else 2 if abs(entry - ma20) <= 2.5 * current_atr else 0,
@@ -144,9 +146,11 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     confirmations = 2 + int(aligned) + int(btc_aligned) + int(volume_ratio >= 1.2) + int(rr >= float(cfg["min_risk_reward"])) + int(breakdown["Liquidez"] > 0) + int(breakdown["Precisão da entrada"] > 0)
     if aligned: reasons.append("Tendência alinhada em 20/50/200 períodos")
     else: risks.append("Sinal não está plenamente alinhado à tendência principal")
-    if btc_aligned:
-        reasons.append("Contexto do BTC alinhado")
-    else: risks.append("Contexto do BTC contrário ao sinal")
+    if uses_btc_regime:
+        if btc_aligned:
+            reasons.append("Regime diário do BTC alinhado à direção da cripto")
+        else:
+            risks.append("Regime diário do BTC contrário à direção da cripto")
     if volume_ratio >= 1.2: reasons.append(f"Volume relativo {volume_ratio:.1f}x")
     else: risks.append(f"Volume relativo ainda modesto: {volume_ratio:.1f}x")
     if market.daily_quote_volume < float(cfg["min_daily_quote_volume"]): risks.append("Liquidez diária abaixo do filtro preferencial")
@@ -157,7 +161,7 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
         reasons, risks, last.timestamp, breakdown, confirmations)
 
 
-def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool, cfg: dict,
+def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool | None, cfg: dict,
                       btc_change_30d: float | None = None) -> PotentialOpportunity | None:
     if len(candles) < int(cfg["min_candles"]): return None
     closed = candles[:-1]; closes = [c.close for c in closed]; last = closed[-1]
@@ -169,19 +173,23 @@ def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc
     trend_up, trend_down = last.close > ma20 > ma50 and last.close > ma200, last.close < ma20 < ma50 and last.close < ma200
     volume_ratio = last.volume / max(fmean([c.volume for c in closed[-21:-1]]), 1e-12)
     current_rsi = rsi(closes) or 50
-    btc_text = "BTC em regime diário de alta" if btc_bullish else "BTC em regime diário defensivo/baixista"
-    if btc_change_30d is not None:
-        btc_text += f"; variação nos últimos 30 candles diários: {btc_change_30d:+.1f}%"
+    uses_btc_regime = btc_bullish is not None
     trend_text = ("Preço acima das SMA 20/50/200; tendência compradora alinhada" if trend_up else
                   "Preço abaixo das SMA 20/50/200; tendência vendedora alinhada" if trend_down else
                   "Médias 20/50/200 sem alinhamento completo; mercado em transição")
-    indicators = [btc_text, trend_text, f"RSI 14 em {current_rsi:.1f}",
+    indicators = [trend_text, f"RSI 14 em {current_rsi:.1f}",
                   f"Volume atual em {volume_ratio:.2f}x a média de 20 candles",
                   f"ATR 14 em {current_atr:.8g} ({current_atr/last.close*100:.2f}% do preço)"]
+    if uses_btc_regime:
+        btc_text = "BTC em regime diário de alta" if btc_bullish else "BTC em regime diário defensivo/baixista"
+        if btc_change_30d is not None:
+            btc_text += f"; variação em 30 candles diários: {btc_change_30d:+.1f}%"
+        indicators.insert(0, btc_text)
     if support: indicators.append(f"Suporte técnico mais próximo em {support:.8g}")
     if resistance: indicators.append(f"Resistência técnica mais próxima em {resistance:.8g}")
-    def ready(distance, trend, btc):
-        return min(90, round(35 + max(0, 25 * (1 - distance / zone)) + 15 * trend + 10 * btc + min(5, volume_ratio * 3)))
+    def ready(distance, trend, btc_aligned):
+        context = 10 * btc_aligned if uses_btc_regime else 10 * trend
+        return min(90, round(35 + max(0, 25 * (1 - distance / zone)) + 15 * trend + context + min(5, volume_ratio * 3)))
     if resistance and 0 <= resistance - last.close <= zone:
         r = ready(resistance-last.close, trend_up, btc_bullish)
         trigger, invalid, target = resistance, resistance-current_atr, resistance+2*current_atr
@@ -189,7 +197,8 @@ def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc
         return PotentialOpportunity(market,timeframe,"LONG","Possível rompimento de resistência",trigger,
             invalid,target,r,
             [f"Fechamento acima de {resistance:.8g}","Volume do candle de confirmação ≥ 1,5x da média","Sustentar o nível rompido no reteste"],
-            ["Rejeição na resistência","Rompimento sem volume pode ser falso","BTC enfraquecer antes da confirmação"],last.timestamp,
+            ["Rejeição na resistência", "Rompimento sem volume pode ser falso"] +
+            (["BTC enfraquecer antes da confirmação"] if uses_btc_regime else []), last.timestamp,
             indicators, rr)
     if support and 0 <= last.close - support <= zone:
         direction = "LONG" if not trend_down else "SHORT"
@@ -201,7 +210,8 @@ def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc
         conditions = ([f"Reação compradora e fechamento acima de {trigger:.8g}","Pavio de rejeição ou candle de força","Volume crescente na defesa"] if direction == "LONG" else [f"Fechamento abaixo de {support:.8g}","Volume ≥ 1,5x da média","Reteste do suporte perdido sem recuperação"])
         rr = abs(target-trigger) / max(abs(trigger-invalid), 1e-12)
         return PotentialOpportunity(market,timeframe,direction,scenario,trigger,invalid,target,r,conditions,
-            ["O nível pode não confirmar","Movimento antecipado aumenta o risco","Mudança brusca no BTC invalida o contexto"],last.timestamp,
+            ["O nível pode não confirmar", "Movimento antecipado aumenta o risco"] +
+            (["Mudança brusca no BTC invalida o contexto da cripto"] if uses_btc_regime else []), last.timestamp,
             indicators, rr)
     return None
 
