@@ -8,6 +8,7 @@ class AssetClass(StrEnum):
     CRYPTO = "crypto"
     COMMODITY = "tokenized_commodity"
     STOCK = "us_tokenized_stock"
+    INDEX = "tokenized_index"
 
 
 @dataclass(frozen=True, slots=True)

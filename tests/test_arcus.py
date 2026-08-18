@@ -26,7 +26,8 @@ async def test_arcus_discovers_supported_classes():
         rows = await ArcusAdapter(client, frozenset({"BTC"})).discover_markets()
 
     assert [(row.base, row.asset_class) for row in rows] == [
-        ("BTC", AssetClass.CRYPTO), ("AAPL", AssetClass.STOCK), ("XAU", AssetClass.COMMODITY)]
+        ("BTC", AssetClass.CRYPTO), ("AAPL", AssetClass.STOCK),
+        ("XAU", AssetClass.COMMODITY), ("SPY", AssetClass.INDEX)]
     assert rows[1].open_interest == 60
 
 

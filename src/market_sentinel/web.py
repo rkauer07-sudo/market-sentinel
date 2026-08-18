@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from .app import Sentinel
 from .analysis import pivots
 from .config import load_settings
+from .models import Candle
 
 
 class MemoryLogHandler(logging.Handler):
@@ -236,11 +237,13 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         active_timeframes: dict[tuple[str, str], set[str]] = {}
         for signal in active:
             active_timeframes.setdefault((signal["venue"], signal["symbol"]), set()).add(signal["timeframe"])
-        # The 1h forming candle carries the current high/low. Reconcile active
-        # signals on every price poll, instead of waiting for the next full scan.
-        for _, _, market, candles in valid:
+        # Use a point-in-time price so highs/lows recorded before signal creation
+        # cannot make qualified cards close and reappear between scans.
+        for _, price, market, _ in valid:
+            current = float(price["price"])
+            live_point = Candle(int(time.time()), current, current, current, current, 0)
             for timeframe in active_timeframes.get((market.venue, market.symbol), ()):
-                dashboard.sentinel.store.reconcile(market, timeframe, candles)
+                dashboard.sentinel.store.reconcile(market, timeframe, [live_point])
         dashboard.price_cache_at = time.time()
         return dashboard.price_cache
 

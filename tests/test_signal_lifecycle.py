@@ -49,6 +49,21 @@ def test_same_candle_target_counts_as_success_even_if_stop_is_also_hit(tmp_path)
     store.close()
 
 
+def test_resolved_setup_does_not_flicker_back_during_cooldown(tmp_path):
+    import time
+    store = Store(str(tmp_path / "signals.db")); op = opportunity()
+    signal_id, created = store.register_signal(op, 12)
+    assert created
+    store.db.execute("UPDATE signals SET status='FAILED',closed_at=? WHERE id=?",
+                     (int(time.time()), signal_id))
+    store.db.commit()
+    reopened_id, reopened = store.register_signal(op, 12)
+    assert reopened_id == signal_id
+    assert reopened is False
+    assert store.signals("ACTIVE") == []
+    store.close()
+
+
 def test_target_then_later_stop_counts_in_concretization_rate(tmp_path):
     store = Store(str(tmp_path / "signals.db")); op = opportunity(); store.register_signal(op)
     assert store.reconcile(op.market, "1h", [Candle(100, 100, 105.5, 99, 105, 1)]) == []

@@ -27,7 +27,9 @@ def classify(base: str, raw: dict, core_assets: frozenset[str]) -> AssetClass | 
     clean = upper.split(":")[-1].replace("-PERP", "")
     if "WRAPPED BACKED" in blob:
         clean = clean.lstrip("W").rstrip("X")
-    if category in {"indices", "index", "fx", "preipo"}:
+    if category in {"indices", "index"}:
+        return AssetClass.INDEX
+    if category in {"fx", "preipo"}:
         return None
     if category in {"stock", "stocks"} or raw.get("rwaMarketType") == "STOCK" or \
             re.search(r"(^|[_.:])US($|[_.:])", upper) or clean in US_SECURITY_TICKERS or \

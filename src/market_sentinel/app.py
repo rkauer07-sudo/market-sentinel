@@ -63,7 +63,10 @@ class Sentinel:
             async with semaphore:
                 try:
                     candles = await adapter.candles(market, timeframe, max(260, int(self.settings.analysis["min_candles"]) + 5))
-                    resolutions.extend(self.store.reconcile(market, timeframe, candles))
+                    # Full OHLC ranges are safe only after the candle closes.
+                    # The live-price endpoint handles the forming candle from
+                    # point-in-time prices so pre-signal highs/lows cannot close it.
+                    resolutions.extend(self.store.reconcile(market, timeframe, candles[:-1]))
                     crypto_regime = regime if market.asset_class == AssetClass.CRYPTO else None
                     crypto_change = btc_change_30d if market.asset_class == AssetClass.CRYPTO else None
                     opportunity = analyze(market, timeframe, candles, crypto_regime, self.settings.analysis)
@@ -93,7 +96,8 @@ class Sentinel:
         if failures:
             log.debug("Falhas da varredura: %s", " | ".join(failures))
         for op in opportunities:
-            _, created = self.store.register_signal(op)
+            _, created = self.store.register_signal(
+                op, int(self.settings.analysis["alert_cooldown_hours"]))
             if created:
                 log.info("NOVA OPORTUNIDADE %s %s %s score=%d", op.market.key, op.timeframe, op.direction, op.score)
             if self.store.should_send(op, int(self.settings.analysis["alert_cooldown_hours"])):

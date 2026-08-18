@@ -7,6 +7,7 @@ Agente **read-only** que monitora mercados da Hyperliquid, Backpack, Nado e Arcu
 - Criptos obrigatórias: BTC, ETH, SOL, HYPE, ZEC, BNB, NEAR, SUI, JUP, UNI, AVAX, ZRO e LINK.
 - Todas as commodities tokenizadas identificadas com segurança nas venues.
 - Todas as ações americanas tokenizadas identificadas nas venues.
+- Índices tokenizados identificados nas venues.
 - Arcus incluída em modo somente leitura para mercados perpétuos públicos.
 - Hyperliquid HIP-3 DEXes são descobertas dinamicamente.
 

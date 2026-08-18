@@ -166,10 +166,16 @@ class Store:
              op.market.symbol, op.timeframe, op.score))
         self.db.commit()
 
-    def register_signal(self, op: Opportunity) -> tuple[int, bool]:
+    def register_signal(self, op: Opportunity, reentry_cooldown_hours: int = 0) -> tuple[int, bool]:
         active = self.db.execute("""SELECT id FROM signals WHERE venue=? AND symbol=? AND timeframe=?
             AND direction=? AND status='ACTIVE'""", (op.market.venue, op.market.symbol, op.timeframe, op.direction)).fetchone()
         if active: return active[0], False
+        if reentry_cooldown_hours:
+            recent = self.db.execute("""SELECT id FROM signals WHERE fingerprint=? AND status!='ACTIVE'
+                AND closed_at>=? ORDER BY closed_at DESC LIMIT 1""",
+                (op.fingerprint, int(time.time()) - reentry_cooldown_hours * 3600)).fetchone()
+            if recent:
+                return recent[0], False
         key = f"{op.fingerprint}:{op.candle_timestamp}"
         cursor = self.db.execute("""INSERT OR IGNORE INTO signals
             (signal_key,fingerprint,venue,symbol,asset_class,market_type,timeframe,direction,setup,
