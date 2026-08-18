@@ -24,11 +24,16 @@ from .models import Candle
 
 
 class MemoryLogHandler(logging.Handler):
-    def __init__(self, records: deque[str]):
-        super().__init__(); self.records = records
+    def __init__(self, records: deque[str], store):
+        super().__init__(); self.records = records; self.store = store
 
     def emit(self, record):
-        self.records.append(self.format(record))
+        rendered = self.format(record)
+        self.records.append(rendered)
+        try:
+            self.store.add_operational_log(record.levelname, record.getMessage(), int(record.created))
+        except Exception:
+            pass
 
 
 class Dashboard:
@@ -42,7 +47,7 @@ class Dashboard:
         self.price_cache: dict[str, dict] = {}
         self.price_cache_at = 0.0
         self.logs: deque[str] = deque(maxlen=400)
-        handler = MemoryLogHandler(self.logs)
+        handler = MemoryLogHandler(self.logs, self.sentinel.store)
         handler.setFormatter(logging.Formatter("%(asctime)s · %(levelname)s · %(message)s", "%H:%M:%S"))
         logging.getLogger().addHandler(handler)
 
@@ -167,8 +172,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     async def dashboard_i18n():
         return FileResponse(static_dir / "i18n-full.js", media_type="application/javascript")
 
-    @app.get("/api/status")
-    async def status():
+    def status_payload():
         classes = {}
         for _, market in dashboard.sentinel.markets:
             classes[market.asset_class.value] = classes.get(market.asset_class.value, 0) + 1
@@ -184,6 +188,10 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 "last_error": dashboard.last_error,
                 "interval_seconds": dashboard.settings.runtime["scan_interval_seconds"],
                 "lifecycle": lifecycle}
+
+    @app.get("/api/status")
+    async def status():
+        return status_payload()
 
     @app.post("/api/start")
     async def start(): return {"started": dashboard.start(), "running": dashboard.running}
@@ -265,6 +273,18 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             "events": dashboard.sentinel.store.events(300),
         }
 
+    @app.get("/api/dashboard-state")
+    async def dashboard_state():
+        """All non-price dashboard data from one process and one DB snapshot."""
+        return {
+            "version": dashboard.sentinel.store.snapshot_updated_at() or 0,
+            "status": status_payload(),
+            "opportunities": dashboard.sentinel.store.signals("ACTIVE", 200),
+            "candidates": dashboard.sentinel.store.candidates(),
+            "events": dashboard.sentinel.store.events(300),
+            "logs": dashboard.sentinel.store.operational_logs(300),
+        }
+
     @app.get("/api/signals/{signal_id}/chart")
     async def signal_chart(signal_id: int):
         signal = dashboard.sentinel.store.signal(signal_id)
@@ -335,7 +355,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 for _, m in dashboard.sentinel.markets]
 
     @app.get("/api/logs")
-    async def logs(): return list(dashboard.logs)
+    async def logs(): return dashboard.sentinel.store.operational_logs(300)
 
     return app
 

@@ -49,6 +49,18 @@ def test_same_candle_target_counts_as_success_even_if_stop_is_also_hit(tmp_path)
     store.close()
 
 
+def test_operational_log_survives_process_restart(tmp_path):
+    path = tmp_path / "signals.db"
+    store = Store(str(path))
+    store.add_operational_log("INFO", "Varredura concluída: estado coerente", 1_700_000_000)
+    store.close()
+    reopened = Store(str(path))
+    rows = reopened.operational_logs()
+    assert len(rows) == 1
+    assert "INFO" in rows[0] and "estado coerente" in rows[0]
+    reopened.close()
+
+
 def test_resolved_setup_does_not_flicker_back_during_cooldown(tmp_path):
     import time
     store = Store(str(tmp_path / "signals.db")); op = opportunity()

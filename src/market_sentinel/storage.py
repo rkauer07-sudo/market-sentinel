@@ -54,6 +54,10 @@ class Store:
         CREATE TABLE IF NOT EXISTS candidate_snapshots (
           id INTEGER PRIMARY KEY CHECK (id=1), updated_at INTEGER NOT NULL, payload_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS operational_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL,
+          level TEXT NOT NULL, message TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS migrations (
           name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL
         );
@@ -97,8 +101,22 @@ class Store:
         self.db.execute("DELETE FROM alerts")
         self.db.execute("DELETE FROM runs")
         self.db.execute("DELETE FROM candidate_snapshots")
+        self.db.execute("DELETE FROM operational_logs")
         self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('signals','signal_events')")
         self.db.commit()
+
+    def add_operational_log(self, level: str, message: str, created_at: int | None = None):
+        self.db.execute("INSERT INTO operational_logs(created_at,level,message) VALUES(?,?,?)",
+                        (created_at or int(time.time()), level, message))
+        self.db.execute("""DELETE FROM operational_logs WHERE id NOT IN
+            (SELECT id FROM operational_logs ORDER BY id DESC LIMIT 500)""")
+        self.db.commit()
+
+    def operational_logs(self, limit: int = 300) -> list[str]:
+        rows = self.db.execute("""SELECT created_at,level,message FROM operational_logs
+            ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
+        return [f"{time.strftime('%H:%M:%S', time.localtime(created))} · {level} · {message}"
+                for created, level, message in reversed(rows)]
 
     def _repair_legacy_successes(self):
         """Use persisted maximum favorable movement to fix pre-migration failures."""
