@@ -1,10 +1,12 @@
-name: Market scan
+name: Continuous market scan
 
 on:
   push:
     branches: [main]
   schedule:
-    - cron: "2-59/5 * * * *"
+    # The next shift is queued well before the active 5h30 shift finishes.
+    # GitHub schedule jitter therefore cannot create 20-35 minute data gaps.
+    - cron: "17 */4 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -14,7 +16,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    timeout-minutes: 350
     permissions:
       contents: read
 
@@ -46,11 +48,44 @@ jobs:
       - name: Install agent
         run: python -m pip install .
 
-      - name: Run one coherent scan
+      - name: Monitor continuously with bounded retries
         shell: bash
         run: |
           market-sentinel audit-failures
-          market-sentinel once
+
+          deadline=$((SECONDS + 19800))
+          # 2m30 cadence leaves another 2m30 recovery budget before the
+          # dashboard can cross the five-minute freshness objective.
+          cadence=150
+          failures=0
+
+          while (( SECONDS < deadline )); do
+            cycle_started=$SECONDS
+            succeeded=false
+
+            for attempt in 1 2 3; do
+              if market-sentinel once; then
+                succeeded=true
+                break
+              fi
+              failures=$((failures + 1))
+              echo "::warning::Varredura falhou (tentativa ${attempt}/3); repetindo em 20 segundos"
+              sleep 20
+            done
+
+            if [[ "$succeeded" != "true" ]]; then
+              echo "::error::Três tentativas falharam; novo ciclo será iniciado sem esperar a cadência completa"
+              continue
+            fi
+
+            elapsed=$((SECONDS - cycle_started))
+            remaining=$((cadence - elapsed))
+            if (( remaining > 0 && SECONDS + remaining < deadline )); then
+              sleep "$remaining"
+            fi
+          done
+
+          echo "Turno contínuo concluído com ${failures} tentativa(s) malsucedida(s)"
 
       - name: Verify remote database
         run: |
