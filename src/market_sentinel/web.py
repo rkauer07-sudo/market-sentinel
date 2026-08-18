@@ -118,6 +118,27 @@ def serialize_candidate(candidate):
     }
 
 
+def live_resolution(signal: dict, price: float) -> dict | None:
+    """Classify a terminal touch without mutating a serverless DB copy."""
+    targets = [(number, signal.get(f"target{number}")) for number in range(1, 6)]
+    targets = [(number, value) for number, value in targets if value is not None]
+    if not targets:
+        return None
+    final_number, final_price = targets[-1]
+    long = signal["direction"] == "LONG"
+    final_hit = price >= final_price if long else price <= final_price
+    stop_hit = price <= signal["stop"] if long else price >= signal["stop"]
+    if final_hit:
+        return {"id": signal["id"], "status": f"SUCCESS_T{final_number}",
+                "price": final_price, "symbol": signal["symbol"]}
+    if stop_hit:
+        highest = int(signal.get("highest_target_hit") or 0)
+        status = f"SUCCESS_T{highest}" if highest else "FAILED"
+        return {"id": signal["id"], "status": status,
+                "price": signal["stop"], "symbol": signal["symbol"]}
+    return None
+
+
 def rolling_sma(values: list[float], period: int) -> list[float | None]:
     result = []
     for index in range(len(values)):
@@ -259,6 +280,16 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         results = await asyncio.gather(*(quote(a, m) for a, m in matches))
         valid = [x for x in results if x]
         dashboard.price_cache = {key: price for key, price, _, _ in valid}
+        signal_by_market: dict[tuple[str, str], list[dict]] = {}
+        for signal in active:
+            signal_by_market.setdefault((signal["venue"], signal["symbol"]), []).append(signal)
+        resolutions = []
+        for _, quote_data, market, _ in valid:
+            for signal in signal_by_market.get((market.venue, market.symbol), ()):
+                resolution = live_resolution(signal, float(quote_data["price"]))
+                if resolution:
+                    resolutions.append(resolution)
+        dashboard.price_cache["__resolutions"] = resolutions
         # This GET endpoint must never mutate a serverless instance's local DB.
         # Reconciliation belongs exclusively to the scheduled scanner.
         dashboard.price_cache_at = time.time()
