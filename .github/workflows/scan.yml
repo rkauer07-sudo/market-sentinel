@@ -1,10 +1,9 @@
 name: Market scan
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "2 * * * *"
+  # Production is continuously monitored by the Render service. Keep this
+  # workflow only as an explicit recovery tool so two agents never publish
+  # divergent signal ledgers at the same time.
   workflow_dispatch:
 
 concurrency:
