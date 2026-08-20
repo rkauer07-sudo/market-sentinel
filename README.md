@@ -64,6 +64,22 @@ Abra `http://127.0.0.1:8765`. O painel permite iniciar/parar o loop, executar um
 varredura imediata, atualizar o universo e acompanhar oportunidades e logs. Por
 padrão, a interface escuta somente no computador local.
 
+## Login Web3 e chat
+
+O painel aceita login por carteira compatível com `personal_sign` (MetaMask, Rabby e similares).
+A assinatura serve apenas para provar a posse do endereço: ela não cria transação, não pede chave
+privada e não concede acesso aos fundos. A sessão fica em cookie `HttpOnly` assinado.
+
+Em SQLite/Render, usuários e mensagens são criados automaticamente. No modo Vercel + Supabase:
+
+1. Execute [`supabase_social.sql`](supabase_social.sql) uma vez no SQL Editor do Supabase.
+2. Configure `SESSION_SECRET` com um valor longo e aleatório na Vercel e no worker web.
+3. Mantenha `SUPABASE_SERVICE_ROLE_KEY` apenas no backend; ela nunca deve ir para o JavaScript.
+
+As tabelas de usuários já incluem `plan`, `subscription_status`, provedor, cliente externo e fim do
+período. Esses campos deixam a base pronta para a futura cobrança mensal, mas nenhum pagamento é
+processado nesta versão.
+
 Sem Telegram configurado, `once` mostra oportunidades no terminal e `run` apenas registra logs; nada é enviado.
 
 ## Docker 24/7
@@ -105,7 +121,7 @@ preservem sinais, eventos, cooldowns e cenários.
 2. No GitHub, em **Settings > Secrets and variables > Actions**, crie os secrets
    `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`.
 3. Na Vercel, adicione `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `SUPABASE_STORAGE_BUCKET=sentinel` e `SUPABASE_DB_OBJECT=sentinel.db`.
+   `SUPABASE_STORAGE_BUCKET=sentinel`, `SUPABASE_DB_OBJECT=sentinel.db` e `SESSION_SECRET`.
 4. Envie `.github/workflows/scan.yml` e o restante das alterações para a branch `main`.
 5. Em **GitHub > Actions > Market scan**, execute **Run workflow** uma vez para criar o banco.
 
@@ -120,6 +136,8 @@ Edite `config.yaml` para alterar intervalo de varredura, timeframes, score, liqu
 - registra criação, alvo, stop e expiração em uma linha do tempo persistente;
 - mede movimento favorável/adverso máximo e taxa histórica de concretização;
 - falha isoladamente por venue;
+- limita e repete chamadas da Hyperliquid quando houver HTTP 429;
+- registra logs estruturados e um diagnóstico de filtros para cada ciclo;
 - não classifica instrumentos ambíguos;
 - não envia alerta se o R:R calculado não alcançar o mínimo.
 

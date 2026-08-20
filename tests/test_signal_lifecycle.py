@@ -57,7 +57,9 @@ def test_operational_log_survives_process_restart(tmp_path):
     reopened = Store(str(path))
     rows = reopened.operational_logs()
     assert len(rows) == 1
-    assert "INFO" in rows[0] and "estado coerente" in rows[0]
+    assert rows[0]["level"] == "INFO"
+    assert "estado coerente" in rows[0]["message"]
+    assert rows[0]["component"] == "core"
     reopened.close()
 
 

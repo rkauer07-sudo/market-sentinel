@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import hmac
 import logging
 import os
+import secrets
 import time
 from statistics import fmean
 from collections import deque
@@ -19,27 +21,31 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .app import Sentinel
 from .analysis import pivots
+from .auth import create_session, new_wallet_challenge, normalize_address, read_session, recover_address
 from .config import load_settings
 from .models import Candle
+from .social import SocialStore, SocialUnavailable
 
 
 class MemoryLogHandler(logging.Handler):
-    def __init__(self, records: deque[str], store):
-        super().__init__(); self.records = records; self.store = store
+    def __init__(self, records: deque[str]):
+        super().__init__(); self.records = records
 
     def emit(self, record):
         rendered = self.format(record)
         self.records.append(rendered)
-        try:
-            self.store.add_operational_log(record.levelname, record.getMessage(), int(record.created))
-        except Exception:
-            pass
 
 
 class Dashboard:
     def __init__(self, config_path: str):
         self.settings = load_settings(config_path)
         self.sentinel = Sentinel(self.settings)
+        self.social = SocialStore(self.sentinel.store)
+        secret_source = (os.getenv("SESSION_SECRET") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+                         or os.getenv("DASHBOARD_PASSWORD"))
+        self.ephemeral_session_secret = not bool(secret_source)
+        self.session_secret = hashlib.sha256(
+            f"market-sentinel-session:{secret_source or secrets.token_urlsafe(32)}".encode()).hexdigest()
         self.task: asyncio.Task | None = None
         self.scan_lock = asyncio.Lock()
         self.last_opportunities = []
@@ -47,9 +53,10 @@ class Dashboard:
         self.price_cache: dict[str, dict] = {}
         self.price_cache_at = 0.0
         self.logs: deque[str] = deque(maxlen=400)
-        handler = MemoryLogHandler(self.logs, self.sentinel.store)
-        handler.setFormatter(logging.Formatter("%(asctime)s · %(levelname)s · %(message)s", "%H:%M:%S"))
-        logging.getLogger().addHandler(handler)
+        self.memory_handler = MemoryLogHandler(self.logs)
+        self.memory_handler.setFormatter(
+            logging.Formatter("%(asctime)s · %(levelname)s · %(message)s", "%H:%M:%S"))
+        logging.getLogger().addHandler(self.memory_handler)
 
     async def scan(self):
         if self.scan_lock.locked(): raise HTTPException(409, "Já existe uma varredura em andamento")
@@ -154,14 +161,37 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         if os.getenv("AUTOSTART", "false").lower() in {"1", "true", "yes", "on"}:
             dashboard.start()
         yield
+        logging.getLogger().removeHandler(dashboard.memory_handler)
         await dashboard.stop(); await dashboard.sentinel.close()
 
-    app = FastAPI(title="Market Sentinel", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Market Sentinel", version="0.2.0", lifespan=lifespan)
     app.state.dashboard = dashboard
     static_dir = Path(__file__).parent / "static"
     static = static_dir / "index.html"
     auth_user = os.getenv("DASHBOARD_USER")
     auth_password = os.getenv("DASHBOARD_PASSWORD")
+    session_cookie = "sentinel_session"
+
+    def request_wallet(request: Request) -> str | None:
+        return read_session(request.cookies.get(session_cookie), dashboard.session_secret)
+
+    def public_user(user: dict | None) -> dict | None:
+        if not user:
+            return None
+        return {key: user.get(key) for key in (
+            "wallet_address", "display_name", "plan", "subscription_status", "current_period_end")}
+
+    def require_wallet(request: Request) -> tuple[str, dict]:
+        address = request_wallet(request)
+        if not address:
+            raise HTTPException(401, "Conecte e assine com sua carteira para acessar o chat")
+        try:
+            user = dashboard.social.user(address)
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if not user:
+            raise HTTPException(401, "Sessão não corresponde a um usuário ativo")
+        return address, user
 
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
@@ -169,7 +199,11 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             # sqlite3 connections are thread-bound by default. Keep refresh in
             # the request thread so closing/reopening the shared connection is safe.
             dashboard.sentinel.store.sync_from_remote()
-        if request.url.path == "/health" or not (auth_user and auth_password):
+        admin_paths = {"/api/start", "/api/stop", "/api/scan"}
+        protect_all = os.getenv("DASHBOARD_BASIC_PROTECT_ALL", "false").lower() in {"1", "true", "yes"}
+        needs_basic = request.url.path in admin_paths or (
+            request.url.path == "/api/markets" and request.query_params.get("refresh") == "true")
+        if not (auth_user and auth_password) or (not protect_all and not needs_basic):
             response = await call_next(request)
             if request.url.path.startswith("/api/"):
                 response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
@@ -196,7 +230,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             raise HTTPException(409, "Monitor gerenciado pela rotina central; painel em modo somente leitura")
 
     @app.get("/health", include_in_schema=False)
-    async def health(): return {"status": "ok"}
+    async def health(): return {"status": "ok", "version": "0.2.0"}
 
     @app.get("/", include_in_schema=False)
     async def index(): return FileResponse(static)
@@ -205,22 +239,114 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     async def dashboard_i18n():
         return FileResponse(static_dir / "i18n-full.js", media_type="application/javascript")
 
+    @app.post("/api/auth/nonce")
+    async def wallet_nonce(request: Request):
+        try:
+            payload = await request.json()
+            address = normalize_address(payload.get("address"))
+            host = (request.headers.get("x-forwarded-host") or request.headers.get("host")
+                    or request.url.hostname or "market-sentinel")
+            nonce, message, expires_at = new_wallet_challenge(address, host.split(",")[0])
+            dashboard.social.save_challenge(address, nonce, message, expires_at)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"nonce": nonce, "message": message, "expires_at": expires_at}
+
+    @app.post("/api/auth/verify")
+    async def wallet_verify(request: Request):
+        try:
+            payload = await request.json()
+            address = normalize_address(payload.get("address"))
+            nonce, signature = str(payload.get("nonce") or ""), str(payload.get("signature") or "")
+            if not nonce or len(signature) < 20:
+                raise ValueError("Desafio ou assinatura ausente")
+            message = dashboard.social.challenge_message(address, nonce)
+            if not message:
+                raise ValueError("Desafio expirado ou já utilizado")
+            if recover_address(message, signature) != address:
+                raise ValueError("A assinatura não corresponde à carteira informada")
+            if not dashboard.social.consume_challenge(address, nonce):
+                raise ValueError("Desafio expirado ou já utilizado")
+            user = dashboard.social.upsert_user(address)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        response = JSONResponse({"authenticated": True, "user": public_user(user)})
+        secure_setting = os.getenv("SESSION_COOKIE_SECURE", "auto").lower()
+        forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        secure = secure_setting in {"1", "true", "yes"} or (
+            secure_setting == "auto" and forwarded_proto.split(",")[0] == "https")
+        response.set_cookie(session_cookie, create_session(address, dashboard.session_secret),
+            max_age=30 * 24 * 3600, httponly=True, secure=secure, samesite="lax", path="/")
+        return response
+
+    @app.get("/api/auth/me")
+    async def wallet_me(request: Request):
+        address = request_wallet(request)
+        if not address:
+            return {"authenticated": False, "user": None,
+                    "session_persistent": not dashboard.ephemeral_session_secret}
+        try:
+            user = dashboard.social.user(address)
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"authenticated": bool(user), "user": public_user(user),
+                "session_persistent": not dashboard.ephemeral_session_secret}
+
+    @app.post("/api/auth/logout")
+    async def wallet_logout():
+        response = JSONResponse({"authenticated": False})
+        response.delete_cookie(session_cookie, path="/")
+        return response
+
+    @app.get("/api/chat/messages")
+    async def chat_messages(request: Request, after_id: int = 0, limit: int = 100):
+        address, _ = require_wallet(request)
+        try:
+            rows = dashboard.social.messages(after_id, limit)
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"messages": [{**row, "mine": row["wallet_address"] == address} for row in rows]}
+
+    @app.post("/api/chat/messages")
+    async def send_chat_message(request: Request):
+        address, _ = require_wallet(request)
+        try:
+            payload = await request.json()
+            message = dashboard.social.add_message(address, payload.get("body", ""))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {**message, "mine": True}
+
     def status_payload():
         classes = {}
         for _, market in dashboard.sentinel.markets:
             classes[market.asset_class.value] = classes.get(market.asset_class.value, 0) + 1
+        latest_run = dashboard.sentinel.store.latest_run()
+        if not classes and latest_run:
+            classes = latest_run.get("diagnostics", {}).get("classes", {})
         lifecycle = dashboard.sentinel.store.signal_stats()
         scheduled = bool(not dashboard.running and dashboard.sentinel.store.remote_url
                          and dashboard.sentinel.store.remote_key and not dashboard.sentinel.store.remote_error)
+        last_scan_at = dashboard.sentinel.store.snapshot_updated_at() or (
+            latest_run.get("finished_at") if latest_run else None)
         return {"running": dashboard.running, "scanning": dashboard.scan_lock.locked(),
-                "scheduled": scheduled, "last_scan_at": dashboard.sentinel.store.snapshot_updated_at(),
+                "scheduled": scheduled, "last_scan_at": last_scan_at,
                 "storage_error": dashboard.sentinel.store.remote_error,
-                "telegram": dashboard.sentinel.notifier.configured, "market_count": len(dashboard.sentinel.markets),
+                "telegram": dashboard.sentinel.notifier.configured,
+                "market_count": len(dashboard.sentinel.markets) or (latest_run.get("markets", 0) if latest_run else 0),
                 "classes": classes, "opportunity_count": len(dashboard.last_opportunities),
                 "candidate_count": len(dashboard.sentinel.store.candidates()),
                 "last_error": dashboard.last_error,
                 "interval_seconds": dashboard.settings.runtime["scan_interval_seconds"],
-                "lifecycle": lifecycle}
+                "lifecycle": lifecycle, "latest_run": latest_run,
+                "social": {"backend": dashboard.social.backend,
+                           "session_persistent": not dashboard.ephemeral_session_secret}}
 
     @app.get("/api/status")
     async def status():

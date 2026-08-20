@@ -82,15 +82,21 @@ def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direct
     return max(matches, key=lambda item: item[0])[1] if matches else None
 
 
-def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool | None, cfg: dict) -> Opportunity | None:
+def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool | None,
+            cfg: dict, diagnostics: dict | None = None) -> Opportunity | None:
+    def reject(reason: str):
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
+        return None
+
     minimum = int(cfg["min_candles"])
-    if len(candles) < minimum: return None
+    if len(candles) < minimum: return reject("insufficient_candles")
     closed = candles[:-1]  # Never act on a still-forming candle.
     closes = [x.close for x in closed]; volumes = [x.volume for x in closed]
     last, previous = closed[-1], closed[-2]
     current_atr = atr(closed)
     ma20, ma50, ma200 = sma(closes, 20), sma(closes, 50), sma(closes, 200)
-    if not current_atr or not all((ma20, ma50, ma200)): return None
+    if not current_atr or not all((ma20, ma50, ma200)): return reject("indicators_unavailable")
     lows, highs = pivots(closed, int(cfg["pivot_window"]))
     support, resistance = nearest(lows, last.close, True), nearest(highs, last.close, False)
     volume_ratio = last.volume / max(fmean(volumes[-21:-1]), 1e-12)
@@ -113,12 +119,12 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     elif short_retest is not None:
         setup, direction, entry, stop = "perda + reteste confirmado", "SHORT", last.close, short_retest + current_atr
     else:
-        return None
+        return reject("no_confirmed_setup")
     risk = abs(entry - stop)
-    if risk <= 0: return None
+    if risk <= 0: return reject("invalid_risk")
     vibe = technical_snapshot(closes)
     if vibe is None or not vibe.confirms(direction, entry):
-        return None
+        return reject("vibe_not_confirmed")
     target1, target2, target3, target4, target5 = fibonacci_targets(entry, stop, direction)
     rr = 2.618
     reasons, risks = [f"Estrutura confirmada: {setup}",
@@ -129,8 +135,12 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     btc_aligned = not uses_btc_regime or ((btc_bullish and direction == "LONG") or (not btc_bullish and direction == "SHORT"))
     # Precision-first gate: score cannot compensate for a counter-trend,
     # counter-regime, or weak-volume signal.
-    if not aligned or not btc_aligned or volume_ratio < retest_volume:
-        return None
+    if not aligned:
+        return reject("trend_not_aligned")
+    if not btc_aligned:
+        return reject("btc_regime_not_aligned")
+    if volume_ratio < retest_volume:
+        return reject("retest_volume_too_low")
     breakdown = {
         "Estrutura": 15,
         "Tendência": 15 if aligned else 0,
@@ -154,8 +164,14 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     if volume_ratio >= 1.2: reasons.append(f"Volume relativo {volume_ratio:.1f}x")
     else: risks.append(f"Volume relativo ainda modesto: {volume_ratio:.1f}x")
     if market.daily_quote_volume < float(cfg["min_daily_quote_volume"]): risks.append("Liquidez diária abaixo do filtro preferencial")
-    if rr < float(cfg["min_risk_reward"]) or score < int(cfg["min_score"]) or confirmations < int(cfg.get("min_confirmations", 5)): return None
-    if score >= int(cfg.get("strong_score", 85)) and volume_ratio < retest_volume: return None
+    if rr < float(cfg["min_risk_reward"]): return reject("risk_reward_too_low")
+    if score < int(cfg["min_score"]): return reject("score_too_low")
+    if confirmations < int(cfg.get("min_confirmations", 5)): return reject("confirmations_too_low")
+    if score >= int(cfg.get("strong_score", 85)) and volume_ratio < retest_volume:
+        return reject("strong_signal_volume_too_low")
+    if diagnostics is not None:
+        diagnostics.update({"reason": "accepted", "score": score,
+                            "confirmations": confirmations, "volume_ratio": round(volume_ratio, 3)})
     return Opportunity(market, timeframe, direction, setup, entry, stop,
         target1, target2, target3, target4, target5, rr, score,
         reasons, risks, last.timestamp, breakdown, confirmations)

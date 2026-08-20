@@ -24,8 +24,7 @@ class Store:
                 self.remote_error = f"{type(exc).__name__}: {exc}"
         self.last_remote_sync = time.time()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path, check_same_thread=False)
-        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db = self._connect()
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS alerts (
           fingerprint TEXT PRIMARY KEY, sent_at INTEGER NOT NULL, candle_timestamp INTEGER NOT NULL,
@@ -70,6 +69,11 @@ class Store:
         self._ensure_column("signals", "target4", "REAL")
         self._ensure_column("signals", "target5", "REAL")
         self._ensure_column("signals", "highest_target_hit", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("operational_logs", "component", "TEXT NOT NULL DEFAULT 'core'")
+        self._ensure_column("operational_logs", "event", "TEXT")
+        self._ensure_column("runs", "candidates", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("runs", "status", "TEXT NOT NULL DEFAULT 'running'")
+        self._ensure_column("runs", "diagnostics_json", "TEXT NOT NULL DEFAULT '{}'")
         expired = self.db.execute("SELECT id FROM signals WHERE status='EXPIRED'").fetchall()
         for (signal_id,) in expired:
             self.db.execute("""UPDATE signals SET status='ACTIVE',closed_at=NULL,close_price=NULL,
@@ -105,23 +109,58 @@ class Store:
         self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('signals','signal_events')")
         self.db.commit()
 
-    def add_operational_log(self, level: str, message: str, created_at: int | None = None):
-        self.db.execute("INSERT INTO operational_logs(created_at,level,message) VALUES(?,?,?)",
-                        (created_at or int(time.time()), level, message))
+    def _connect(self):
+        db = sqlite3.connect(self.path, check_same_thread=False)
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA busy_timeout=5000")
+        db.execute("PRAGMA foreign_keys=ON")
+        return db
+
+    def add_operational_log(self, level: str, message: str, created_at: int | None = None,
+                            component: str = "core", event: str | None = None):
+        self.db.execute("""INSERT INTO operational_logs
+            (created_at,level,message,component,event) VALUES(?,?,?,?,?)""",
+            (created_at or int(time.time()), level, message, component, event))
         self.db.execute("""DELETE FROM operational_logs WHERE id NOT IN
             (SELECT id FROM operational_logs ORDER BY id DESC LIMIT 500)""")
         self.db.commit()
 
-    def operational_logs(self, limit: int = 300) -> list[str]:
+    def operational_logs(self, limit: int = 300) -> list[dict]:
         try:
-            rows = self.db.execute("""SELECT created_at,level,message FROM operational_logs
+            rows = self.db.execute("""SELECT id,created_at,level,component,event,message FROM operational_logs
                 ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
         except sqlite3.OperationalError:
             # A warm Vercel function may briefly hold the previous remote schema.
             # Keep the dashboard API alive until the next synced snapshot arrives.
             return []
-        return [f"{time.strftime('%H:%M:%S', time.localtime(created))} · {level} · {message}"
-                for created, level, message in reversed(rows)]
+        keys = ("id", "created_at", "level", "component", "event", "message")
+        return [dict(zip(keys, row)) for row in reversed(rows)]
+
+    def start_run(self) -> int:
+        cursor = self.db.execute("INSERT INTO runs(started_at,status) VALUES(?,'running')",
+                                 (int(time.time()),))
+        self.db.commit()
+        return int(cursor.lastrowid)
+
+    def finish_run(self, run_id: int, *, markets: int, opportunities: int, candidates: int,
+                   errors: int, status: str, diagnostics: dict | None = None):
+        self.db.execute("""UPDATE runs SET finished_at=?,markets=?,opportunities=?,candidates=?,
+            errors=?,status=?,diagnostics_json=? WHERE rowid=?""",
+            (int(time.time()), markets, opportunities, candidates, errors, status,
+             json.dumps(diagnostics or {}, ensure_ascii=False), run_id))
+        self.db.execute("DELETE FROM runs WHERE rowid NOT IN (SELECT rowid FROM runs ORDER BY rowid DESC LIMIT 200)")
+        self.db.commit()
+
+    def latest_run(self) -> dict | None:
+        row = self.db.execute("""SELECT rowid,started_at,finished_at,markets,opportunities,
+            errors,candidates,status,diagnostics_json FROM runs ORDER BY rowid DESC LIMIT 1""").fetchone()
+        if not row:
+            return None
+        keys = ("id", "started_at", "finished_at", "markets", "opportunities",
+                "errors", "candidates", "status", "diagnostics")
+        values = list(row)
+        values[-1] = json.loads(values[-1] or "{}")
+        return dict(zip(keys, values))
 
     def _repair_legacy_successes(self):
         """Use persisted maximum favorable movement to fix pre-migration failures."""
@@ -413,6 +452,10 @@ class Store:
             raise RuntimeError("O objeto baixado do Supabase não é um banco SQLite válido")
         temporary = self.path.with_suffix(".download")
         temporary.write_bytes(response.content)
+        # A previous warm serverless invocation may have left a WAL that belongs
+        # to another database generation. Replaying it would make fresh data look stale.
+        for suffix in ("-wal", "-shm"):
+            Path(f"{self.path}{suffix}").unlink(missing_ok=True)
         temporary.replace(self.path)
         self.remote_error = None
 
@@ -430,7 +473,7 @@ class Store:
         except Exception as exc:
             self.remote_error = f"{type(exc).__name__}: {exc}"
         finally:
-            self.db = sqlite3.connect(self.path, check_same_thread=False)
+            self.db = self._connect()
             self.last_remote_sync = time.time()
 
     def close(self):

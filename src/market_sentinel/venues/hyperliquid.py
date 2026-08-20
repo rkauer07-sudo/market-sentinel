@@ -9,10 +9,32 @@ class HyperliquidAdapter(VenueAdapter):
     name = "hyperliquid"
     url = "https://api.hyperliquid.xyz/info"
 
+    def __init__(self, client, core_assets):
+        super().__init__(client, core_assets)
+        self.request_interval = .25
+        self._rate_lock = asyncio.Lock()
+        self._next_request_at = 0.0
+
     async def _post(self, body):
-        response = await self.client.post(self.url, json=body)
-        response.raise_for_status()
-        return response.json()
+        for attempt in range(5):
+            async with self._rate_lock:
+                delay = self._next_request_at - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                self._next_request_at = time.monotonic() + self.request_interval
+            response = await self.client.post(self.url, json=body)
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response.json()
+            if attempt == 4:
+                response.raise_for_status()
+            retry_after = response.headers.get("Retry-After")
+            try:
+                wait = max(float(retry_after or 0), .75 * (2 ** attempt))
+            except ValueError:
+                wait = .75 * (2 ** attempt)
+            await asyncio.sleep(min(wait, 6))
+        raise RuntimeError("Hyperliquid excedeu o limite de tentativas")
 
     async def discover_markets(self) -> list[Market]:
         dex_rows, category_rows = await asyncio.gather(
