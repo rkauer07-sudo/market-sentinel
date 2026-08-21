@@ -60,6 +60,9 @@ class Opportunity:
     candle_timestamp: int
     score_breakdown: dict[str, int] = field(default_factory=dict)
     confirmation_count: int = 0
+    base_score: int | None = None
+    learning_adjustment: int = 0
+    learning_evidence: list[str] = field(default_factory=list)
 
     @property
     def targets(self) -> list[float]:

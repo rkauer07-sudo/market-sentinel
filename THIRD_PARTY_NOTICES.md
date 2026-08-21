@@ -3,7 +3,9 @@
 ## Vibe-Trading
 
 Technical-indicator confirmation logic in `src/market_sentinel/vibe_indicators.py`
-is adapted from [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading).
+and the evidence-gated journal/walk-forward methodology in
+`src/market_sentinel/learning.py` are adapted from
+[HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading).
 
 MIT License
 

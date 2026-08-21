@@ -4,6 +4,7 @@ import sqlite3
 import time
 from pathlib import Path
 import httpx
+from .explanations import explain_candidate
 from .models import Opportunity
 
 
@@ -60,6 +61,17 @@ class Store:
         CREATE TABLE IF NOT EXISTS migrations (
           name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS learning_runs (
+          day TEXT PRIMARY KEY, created_at INTEGER NOT NULL, cutoff_at INTEGER NOT NULL,
+          sample_size INTEGER NOT NULL, wins INTEGER NOT NULL, win_rate REAL,
+          promoted_profiles INTEGER NOT NULL, status TEXT NOT NULL, summary_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS learning_profiles (
+          profile_key TEXT PRIMARY KEY, dimension TEXT NOT NULL, value TEXT NOT NULL,
+          samples INTEGER NOT NULL, wins INTEGER NOT NULL, win_rate REAL NOT NULL,
+          modifier INTEGER NOT NULL, confidence REAL NOT NULL, trained_until INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
         """)
         self._ensure_column("signals", "reasons_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("signals", "risks_json", "TEXT NOT NULL DEFAULT '[]'")
@@ -69,6 +81,9 @@ class Store:
         self._ensure_column("signals", "target4", "REAL")
         self._ensure_column("signals", "target5", "REAL")
         self._ensure_column("signals", "highest_target_hit", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("signals", "base_score", "INTEGER")
+        self._ensure_column("signals", "learning_adjustment", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("signals", "learning_evidence_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("operational_logs", "component", "TEXT NOT NULL DEFAULT 'core'")
         self._ensure_column("operational_logs", "event", "TEXT")
         self._ensure_column("runs", "candidates", "INTEGER NOT NULL DEFAULT 0")
@@ -95,6 +110,8 @@ class Store:
         self.db.execute("DELETE FROM alerts")
         self.db.execute("DELETE FROM runs")
         self.db.execute("DELETE FROM candidate_snapshots")
+        self.db.execute("DELETE FROM learning_runs")
+        self.db.execute("DELETE FROM learning_profiles")
         self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('signals','signal_events')")
         self.db.execute("INSERT INTO migrations(name,applied_at) VALUES(?,?)", (migration, int(time.time())))
 
@@ -106,6 +123,8 @@ class Store:
         self.db.execute("DELETE FROM runs")
         self.db.execute("DELETE FROM candidate_snapshots")
         self.db.execute("DELETE FROM operational_logs")
+        self.db.execute("DELETE FROM learning_runs")
+        self.db.execute("DELETE FROM learning_profiles")
         self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('signals','signal_events')")
         self.db.commit()
 
@@ -162,6 +181,53 @@ class Store:
         values[-1] = json.loads(values[-1] or "{}")
         return dict(zip(keys, values))
 
+    def resolved_signals(self, *, closed_before: int, lookback_days: int = 180) -> list[dict]:
+        """Return chronological outcomes available before a point-in-time cutoff."""
+        columns = self._signal_columns()
+        since = closed_before - max(1, lookback_days) * 86400
+        rows = self.db.execute("""SELECT * FROM signals WHERE status!='ACTIVE'
+            AND closed_at IS NOT NULL AND closed_at>=? AND closed_at<?
+            ORDER BY closed_at,id""", (since, closed_before)).fetchall()
+        return [self._decode_signal(dict(zip(columns, row))) for row in rows]
+
+    def save_learning_run(self, report: dict):
+        now = int(time.time())
+        self.db.execute("""INSERT INTO learning_runs
+            (day,created_at,cutoff_at,sample_size,wins,win_rate,promoted_profiles,status,summary_json)
+            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(day) DO UPDATE SET
+            created_at=excluded.created_at,cutoff_at=excluded.cutoff_at,
+            sample_size=excluded.sample_size,wins=excluded.wins,win_rate=excluded.win_rate,
+            promoted_profiles=excluded.promoted_profiles,status=excluded.status,
+            summary_json=excluded.summary_json""",
+            (report["day"], now, report["cutoff_at"], report["sample_size"], report["wins"],
+             report.get("win_rate"), report["promoted_profiles"], report["status"],
+             json.dumps(report, ensure_ascii=False)))
+        self.db.commit()
+
+    def learning_run(self, day: str) -> dict | None:
+        row = self.db.execute("SELECT summary_json FROM learning_runs WHERE day=?", (day,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def latest_learning_run(self) -> dict | None:
+        row = self.db.execute("SELECT summary_json FROM learning_runs ORDER BY day DESC LIMIT 1").fetchone()
+        return json.loads(row[0]) if row else None
+
+    def replace_learning_profiles(self, profiles: list[dict]):
+        self.db.execute("DELETE FROM learning_profiles")
+        now = int(time.time())
+        self.db.executemany("""INSERT INTO learning_profiles
+            (profile_key,dimension,value,samples,wins,win_rate,modifier,confidence,trained_until,updated_at)
+            VALUES(:profile_key,:dimension,:value,:samples,:wins,:win_rate,:modifier,:confidence,
+                   :trained_until,:updated_at)""", [{**profile, "updated_at": now} for profile in profiles])
+        self.db.commit()
+
+    def learning_profiles(self) -> dict[str, dict]:
+        rows = self.db.execute("""SELECT profile_key,dimension,value,samples,wins,win_rate,
+            modifier,confidence,trained_until,updated_at FROM learning_profiles""").fetchall()
+        keys = ("profile_key", "dimension", "value", "samples", "wins", "win_rate",
+                "modifier", "confidence", "trained_until", "updated_at")
+        return {row[0]: dict(zip(keys, row)) for row in rows}
+
     def _repair_legacy_successes(self):
         """Use persisted maximum favorable movement to fix pre-migration failures."""
         columns = self._signal_columns()
@@ -201,6 +267,7 @@ class Store:
             "target": c.target, "readiness": c.readiness, "conditions": c.conditions,
             "risks": c.risks, "candle_timestamp": c.candle_timestamp,
             "technical_context": c.technical_context, "risk_reward": c.risk_reward,
+            "simple_explanation": explain_candidate(c),
         } for c in candidates]
         self.db.execute("""INSERT INTO candidate_snapshots(id,updated_at,payload_json) VALUES(1,?,?)
             ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,payload_json=excluded.payload_json""",
@@ -209,7 +276,10 @@ class Store:
 
     def candidates(self) -> list[dict]:
         row = self.db.execute("SELECT payload_json FROM candidate_snapshots WHERE id=1").fetchone()
-        return json.loads(row[0]) if row else []
+        candidates = json.loads(row[0]) if row else []
+        for candidate in candidates:
+            candidate.setdefault("simple_explanation", explain_candidate(candidate))
+        return candidates
 
     def snapshot_updated_at(self) -> int | None:
         row = self.db.execute("SELECT updated_at FROM candidate_snapshots WHERE id=1").fetchone()
@@ -242,14 +312,16 @@ class Store:
         cursor = self.db.execute("""INSERT OR IGNORE INTO signals
             (signal_key,fingerprint,venue,symbol,asset_class,market_type,timeframe,direction,setup,
              entry,stop,target1,target2,target3,target4,target5,risk_reward,score,opened_at,candle_timestamp,status,reasons_json,risks_json,
-             score_breakdown_json,confirmation_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?)""",
+             score_breakdown_json,confirmation_count,base_score,learning_adjustment,learning_evidence_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?,?)""",
             (key, op.fingerprint, op.market.venue, op.market.symbol, op.market.asset_class.value,
              op.market.market_type, op.timeframe, op.direction, op.setup, op.entry, op.stop,
              op.target1, op.target2, op.target3, op.target4, op.target5,
              op.risk_reward, op.score, int(time.time()), op.candle_timestamp,
              json.dumps(op.reasons, ensure_ascii=False), json.dumps(op.risks, ensure_ascii=False),
-             json.dumps(op.score_breakdown, ensure_ascii=False), op.confirmation_count))
+              json.dumps(op.score_breakdown, ensure_ascii=False), op.confirmation_count,
+              op.base_score if op.base_score is not None else op.score, op.learning_adjustment,
+              json.dumps(op.learning_evidence, ensure_ascii=False)))
         if not cursor.rowcount:
             row = self.db.execute("SELECT id FROM signals WHERE signal_key=?", (key,)).fetchone()
             return row[0], False
@@ -414,6 +486,7 @@ class Store:
         signal["reasons"] = json.loads(signal.pop("reasons_json", "[]") or "[]")
         signal["risks"] = json.loads(signal.pop("risks_json", "[]") or "[]")
         signal["score_breakdown"] = json.loads(signal.pop("score_breakdown_json", "{}") or "{}")
+        signal["learning_evidence"] = json.loads(signal.pop("learning_evidence_json", "[]") or "[]")
         return signal
 
     def _ensure_column(self, table: str, column: str, definition: str):

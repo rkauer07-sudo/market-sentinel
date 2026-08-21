@@ -16,7 +16,8 @@ def test_web3_session_unlocks_chat(tmp_path, monkeypatch):
     monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
     app = create_app("config.yaml")
     with TestClient(app) as client:
-        assert client.get("/health").json()["version"] == "0.2.0"
+        assert client.get("/health").json()["version"] == "0.3.0"
+        assert client.get("/api/learning").json() == {"latest": None, "profiles": []}
         assert client.get("/api/chat/messages").status_code == 401
         app.state.dashboard.social.upsert_user(ADDRESS)
         token = create_session(ADDRESS, app.state.dashboard.session_secret)

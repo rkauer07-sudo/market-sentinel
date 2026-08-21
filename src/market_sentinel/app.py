@@ -8,6 +8,7 @@ from .analysis import analyze, analyze_potential, btc_regime
 from .config import Settings
 from .models import AssetClass, Candle, Market
 from .logging_utils import OperationalLogHandler
+from .learning import DailyLearner
 from .storage import Store
 from .telegram import TelegramNotifier
 from .venues import ArcusAdapter, BackpackAdapter, HyperliquidAdapter, NadoAdapter
@@ -28,6 +29,9 @@ class Sentinel:
                          NadoAdapter(self.client, settings.core_assets),
                          ArcusAdapter(self.client, settings.core_assets)]
         self.store = Store(settings.runtime["database_path"])
+        self.learner = DailyLearner(self.store,
+            min_total=int(settings.runtime.get("learning_min_total", 30)),
+            min_segment=int(settings.runtime.get("learning_min_segment", 12)))
         self.operational_handler = OperationalLogHandler(self.store)
         logging.getLogger().addHandler(self.operational_handler)
         logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -67,6 +71,11 @@ class Sentinel:
             opportunities=len(opportunities), candidates=int(metrics.get("candidates", 0)),
             errors=int(metrics.get("errors", 0)), status="completed",
             diagnostics=metrics.get("diagnostics", {}))
+        learning = self.learner.run_if_due()
+        if learning:
+            log.info("Aprendizado diário %s: %d resultados, %.1f%% de acerto, %d perfis validados",
+                     learning["day"], learning["sample_size"], learning.get("win_rate") or 0,
+                     learning["promoted_profiles"], extra={"event": "learning.daily"})
         return opportunities
 
     async def _scan_once_impl(self):
@@ -118,7 +127,22 @@ class Sentinel:
         failures = [x[2] for x in results if x[2]]
         failure_venues = Counter(x.split(":", 1)[0] for x in failures)
         filter_reasons = Counter(x[3].get("reason", "unknown") for x in results if not x[2])
-        ranked = sorted((x[0] for x in results if x[0]), key=lambda x: x.score, reverse=True)
+        adjusted = []
+        learning_rejections = 0
+        for opportunity in (x[0] for x in results if x[0]):
+            opportunity.base_score = opportunity.score
+            modifier, evidence = self.learner.adjustment(opportunity)
+            opportunity.learning_adjustment = modifier
+            opportunity.learning_evidence = evidence
+            opportunity.score = max(0, min(100, opportunity.score + modifier))
+            if modifier:
+                opportunity.reasons.append(
+                    f"Calibração histórica validada: {modifier:+d} pontos (janela cronológica, sem dados futuros).")
+            if opportunity.score < int(self.settings.analysis["min_score"]):
+                learning_rejections += 1
+                continue
+            adjusted.append(opportunity)
+        ranked = sorted(adjusted, key=lambda x: x.score, reverse=True)
         # Avoid correlated duplicate exposure: keep only the strongest venue/timeframe
         # for each underlying asset in a scan.
         opportunities, selected_assets = [], set()
@@ -138,6 +162,8 @@ class Sentinel:
             "classes": dict(Counter(m.asset_class.value for _, m in active_markets)),
             "timeframes": list(self.settings.timeframes),
             "inspections": len(results),
+            "learning_rejections": learning_rejections,
+            "learning_profiles": len(self.store.learning_profiles()),
         }
         self.last_scan_metrics = {"markets": len(active_markets), "opportunities": len(opportunities),
             "candidates": len(self.last_candidates), "errors": len(failures), "diagnostics": diagnostics}

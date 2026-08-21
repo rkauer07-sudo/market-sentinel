@@ -19,10 +19,12 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from . import __version__
 from .app import Sentinel
 from .analysis import pivots
 from .auth import create_session, new_wallet_challenge, normalize_address, read_session, recover_address
 from .config import load_settings
+from .explanations import explain_candidate
 from .models import Candle
 from .social import SocialStore, SocialUnavailable
 
@@ -109,6 +111,8 @@ def serialize_opportunity(op):
         "risk_reward": op.risk_reward, "score": op.score,
         "reasons": op.reasons, "risks": op.risks, "candle_timestamp": op.candle_timestamp,
         "score_breakdown": op.score_breakdown, "confirmation_count": op.confirmation_count,
+        "base_score": op.base_score, "learning_adjustment": op.learning_adjustment,
+        "learning_evidence": op.learning_evidence,
     }
 
 
@@ -122,6 +126,7 @@ def serialize_candidate(candidate):
         "conditions": candidate.conditions, "risks": candidate.risks,
         "candle_timestamp": candidate.candle_timestamp,
         "technical_context": candidate.technical_context, "risk_reward": candidate.risk_reward,
+        "simple_explanation": explain_candidate(candidate),
     }
 
 
@@ -164,7 +169,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         logging.getLogger().removeHandler(dashboard.memory_handler)
         await dashboard.stop(); await dashboard.sentinel.close()
 
-    app = FastAPI(title="Market Sentinel", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Market Sentinel", version=__version__, lifespan=lifespan)
     app.state.dashboard = dashboard
     static_dir = Path(__file__).parent / "static"
     static = static_dir / "index.html"
@@ -230,7 +235,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             raise HTTPException(409, "Monitor gerenciado pela rotina central; painel em modo somente leitura")
 
     @app.get("/health", include_in_schema=False)
-    async def health(): return {"status": "ok", "version": "0.2.0"}
+    async def health(): return {"status": "ok", "version": __version__}
 
     @app.get("/", include_in_schema=False)
     async def index(): return FileResponse(static)
@@ -345,6 +350,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 "last_error": dashboard.last_error,
                 "interval_seconds": dashboard.settings.runtime["scan_interval_seconds"],
                 "lifecycle": lifecycle, "latest_run": latest_run,
+                "learning": dashboard.sentinel.store.latest_learning_run(),
                 "social": {"backend": dashboard.social.backend,
                            "session_persistent": not dashboard.ephemeral_session_secret}}
 
@@ -373,6 +379,11 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.get("/api/candidates")
     async def candidates(): return dashboard.sentinel.store.candidates()
+
+    @app.get("/api/learning")
+    async def learning():
+        return {"latest": dashboard.sentinel.store.latest_learning_run(),
+                "profiles": list(dashboard.sentinel.store.learning_profiles().values())}
 
     @app.get("/api/live-prices")
     async def live_prices():

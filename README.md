@@ -80,6 +80,22 @@ As tabelas de usuários já incluem `plan`, `subscription_status`, provedor, cli
 período. Esses campos deixam a base pronta para a futura cobrança mensal, mas nenhum pagamento é
 processado nesta versão.
 
+## Aprendizado diário auditável
+
+O primeiro ciclo após a virada do dia em `America/Sao_Paulo` avalia apenas sinais já
+encerrados até o fim do dia anterior. A calibração segue o fluxo de diário e validação
+walk-forward do [Vibe-Trading](https://github.com/HKUDS/Vibe-Trading):
+
+- usa uma janela móvel de até 180 dias e separa os 20% mais recentes como validação;
+- exige ao menos 30 resultados totais e 12 por segmento;
+- só promove um ajuste quando histórico e período posterior apontam na mesma direção;
+- limita o ajuste a quatro pontos e registra amostra, acerto e evidência no SQLite;
+- falha fechado: amostra pequena ou validação divergente mantém o modelo atual.
+
+O aprendizado serve para calibrar e filtrar sinais futuros; não altera resultados passados,
+não usa dados posteriores ao corte e não executa ordens. Ele pode melhorar a seleção ao longo
+do tempo, mas não garante aumento de acerto. O resumo fica disponível em `/api/learning`.
+
 Sem Telegram configurado, `once` mostra oportunidades no terminal e `run` apenas registra logs; nada é enviado.
 
 ## Docker 24/7
