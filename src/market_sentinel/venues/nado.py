@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from ..classify import classify
 from ..models import Candle, Market
@@ -9,6 +10,12 @@ class NadoAdapter(VenueAdapter):
     name = "nado"
     gateway = "https://gateway.prod.nado.xyz/v2"
     archive = "https://archive.prod.nado.xyz/v1"
+
+    def __init__(self, client, core_assets):
+        super().__init__(client, core_assets)
+        self.request_interval = .12
+        self._archive_lock = asyncio.Lock()
+        self._next_archive_request = 0.0
 
     async def discover_markets(self) -> list[Market]:
         pairs_response, assets_response = await asyncio.gather(
@@ -33,16 +40,28 @@ class NadoAdapter(VenueAdapter):
 
     async def candles(self, market: Market, timeframe: str, limit: int = 300) -> list[Candle]:
         granularity = {"1h": 3600, "4h": 14400, "1d": 86400}[timeframe]
-        for attempt in range(3):
-            response = await self.client.post(self.archive, json={"candlesticks": {
-                "product_id": market.metadata["product_id"], "granularity": granularity,
-                "limit": min(limit, 500)}})
+        payload = {"candlesticks": {
+            "product_id": market.metadata["product_id"], "granularity": granularity,
+            "limit": min(limit, 500)}}
+        for attempt in range(4):
+            async with self._archive_lock:
+                wait = max(0.0, self._next_archive_request - time.monotonic())
+                if wait:
+                    await asyncio.sleep(wait)
+                response = await self.client.post(self.archive, json=payload)
+                cooldown = self.request_interval
+                if response.status_code in {429, 500, 502, 503, 504}:
+                    try:
+                        retry_after = float(response.headers.get("Retry-After", 0))
+                    except (TypeError, ValueError):
+                        retry_after = 0.0
+                    cooldown = max(cooldown, retry_after, .75 * (2 ** attempt))
+                self._next_archive_request = time.monotonic() + cooldown
             if response.status_code not in {429, 500, 502, 503, 504}:
                 response.raise_for_status()
                 break
-            if attempt == 2:
+            if attempt == 3:
                 response.raise_for_status()
-            await asyncio.sleep(.5 * (2 ** attempt))
         rows = response.json().get("candlesticks", [])
         result = [Candle(integer(x, "timestamp"), scaled(x, "open_x18"), scaled(x, "high_x18"),
             scaled(x, "low_x18"), scaled(x, "close_x18"), scaled(x, "volume")) for x in rows]

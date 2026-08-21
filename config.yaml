@@ -35,6 +35,7 @@ runtime:
   market_refresh_hours: 6
   max_concurrency: 8
   hyperliquid_request_interval_seconds: 0.30
+  nado_request_interval_seconds: 0.12
   learning_min_total: 30
   learning_min_segment: 12
   database_path: data/sentinel.db

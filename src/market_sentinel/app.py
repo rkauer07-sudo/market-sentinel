@@ -24,9 +24,11 @@ class Sentinel:
         hyperliquid = HyperliquidAdapter(self.client, settings.core_assets)
         hyperliquid.request_interval = float(
             settings.runtime.get("hyperliquid_request_interval_seconds", .30))
+        nado = NadoAdapter(self.client, settings.core_assets)
+        nado.request_interval = float(settings.runtime.get("nado_request_interval_seconds", .12))
         self.adapters = [hyperliquid,
                          BackpackAdapter(self.client, settings.core_assets),
-                         NadoAdapter(self.client, settings.core_assets),
+                         nado,
                          ArcusAdapter(self.client, settings.core_assets)]
         self.store = Store(settings.runtime["database_path"])
         self.learner = DailyLearner(self.store,
@@ -102,6 +104,11 @@ class Sentinel:
             async with semaphore:
                 try:
                     candles = await adapter.candles(market, timeframe, max(260, int(self.settings.analysis["min_candles"]) + 5))
+                    # Some newly listed Nado products are visible in discovery before
+                    # their archive contains candles. That is an unavailable market,
+                    # not an operational failure.
+                    if not candles:
+                        return None, None, None, {"reason": "market_without_history"}
                     # Full OHLC ranges are safe only after the candle closes.
                     # The live-price endpoint handles the forming candle from
                     # point-in-time prices so pre-signal highs/lows cannot close it.
