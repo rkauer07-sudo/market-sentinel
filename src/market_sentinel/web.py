@@ -26,6 +26,7 @@ from .auth import create_session, new_wallet_challenge, normalize_address, read_
 from .config import load_settings
 from .explanations import explain_candidate
 from .models import Candle
+from .solana_intel import SolanaIntelService
 from .social import SocialStore, SocialUnavailable
 
 
@@ -42,6 +43,7 @@ class Dashboard:
     def __init__(self, config_path: str):
         self.settings = load_settings(config_path)
         self.sentinel = Sentinel(self.settings)
+        self.solana_intel = SolanaIntelService(self.sentinel.client)
         self.social = SocialStore(self.sentinel.store)
         secret_source = (os.getenv("SESSION_SECRET") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
                          or os.getenv("DASHBOARD_PASSWORD"))
@@ -204,7 +206,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             # sqlite3 connections are thread-bound by default. Keep refresh in
             # the request thread so closing/reopening the shared connection is safe.
             dashboard.sentinel.store.sync_from_remote()
-        admin_paths = {"/api/start", "/api/stop", "/api/scan"}
+        admin_paths = {"/api/start", "/api/stop", "/api/scan", "/api/solana-intel/refresh"}
         protect_all = os.getenv("DASHBOARD_BASIC_PROTECT_ALL", "false").lower() in {"1", "true", "yes"}
         needs_basic = request.url.path in admin_paths or (
             request.url.path == "/api/markets" and request.query_params.get("refresh") == "true")
@@ -243,6 +245,14 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     @app.get("/static/i18n-full.js", include_in_schema=False)
     async def dashboard_i18n():
         return FileResponse(static_dir / "i18n-full.js", media_type="application/javascript")
+
+    @app.get("/static/solana-intel.css", include_in_schema=False)
+    async def solana_intel_css():
+        return FileResponse(static_dir / "solana-intel.css", media_type="text/css")
+
+    @app.get("/static/solana-intel.js", include_in_schema=False)
+    async def solana_intel_js():
+        return FileResponse(static_dir / "solana-intel.js", media_type="application/javascript")
 
     @app.post("/api/auth/nonce")
     async def wallet_nonce(request: Request):
@@ -384,6 +394,21 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     async def learning():
         return {"latest": dashboard.sentinel.store.latest_learning_run(),
                 "profiles": list(dashboard.sentinel.store.learning_profiles().values())}
+
+    @app.get("/api/solana-intel")
+    async def solana_intel():
+        return await dashboard.solana_intel.snapshot()
+
+    @app.post("/api/solana-intel/refresh")
+    async def refresh_solana_intel():
+        return await dashboard.solana_intel.snapshot(force=True)
+
+    @app.get("/api/solana-intel/routes/{mint}")
+    async def solana_intel_routes(mint: str, amount_sol: float = 0.25):
+        try:
+            return await dashboard.solana_intel.routes(mint, amount_sol=amount_sol)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/live-prices")
     async def live_prices():

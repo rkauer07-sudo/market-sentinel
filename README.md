@@ -64,6 +64,33 @@ Abra `http://127.0.0.1:8765`. O painel permite iniciar/parar o loop, executar um
 varredura imediata, atualizar o universo e acompanhar oportunidades e logs. Por
 padrão, a interface escuta somente no computador local.
 
+### Radar Solana: smart wallets e lançamentos
+
+A aba **Smart wallets** é uma camada read-only separada do scanner de futuros:
+
+- Jupiter Tokens V2 lista pools recentes e fornece metadados, liquidez, holders,
+  Organic Score e autoridades do token;
+- Jupiter Swap V2 valida, sob demanda, a existência de rotas de compra e venda
+  por cotação sem `taker`; nenhuma transação é criada, assinada ou enviada;
+- Birdeye, quando configurada, cruza os lançamentos com traders `sniper` e
+  `smart_trader`, PnL e horário aproximado da primeira entrada;
+- Helius fica reservado para a próxima camada de auditoria histórica completa.
+
+Crie uma chave gratuita no portal da Jupiter e uma chave Birdeye para liberar o
+ranking completo. Configure-as apenas no backend:
+
+```env
+JUPITER_API_KEY=...
+BIRDEYE_API_KEY=...
+HELIUS_API_KEY=...              # opcional nesta versão
+SOLANA_INTEL_MAX_TOKENS=12
+SOLANA_INTEL_CACHE_SECONDS=300
+```
+
+Sem `JUPITER_API_KEY`, o serviço tenta o acesso keyless com limite menor. Sem
+`BIRDEYE_API_KEY`, a aba continua mostrando lançamentos e validação de rotas, mas
+explica que o ranking de carteiras ainda não está habilitado.
+
 ## Login Web3 e chat
 
 O painel aceita login por carteira compatível com `personal_sign` (MetaMask, Rabby e similares).

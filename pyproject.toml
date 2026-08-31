@@ -27,7 +27,7 @@ market-sentinel-web = "market_sentinel.web:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-market_sentinel = ["static/*.html", "static/*.js"]
+market_sentinel = ["static/*.html", "static/*.js", "static/*.css"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
