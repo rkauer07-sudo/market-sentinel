@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import re
 import time
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 from statistics import median
 from typing import Any
 
@@ -93,9 +95,28 @@ class SolanaIntelService:
         self.birdeye_base = os.getenv(
             "BIRDEYE_API_BASE", "https://public-api.birdeye.so"
         ).rstrip("/")
-        self.max_tokens = max(1, min(30, _integer(os.getenv("SOLANA_INTEL_MAX_TOKENS"), 12)))
+        self.max_tokens = max(1, min(30, _integer(os.getenv("SOLANA_INTEL_MAX_TOKENS"), 30)))
         self.max_wallets = max(
-            1, min(30, _integer(os.getenv("SOLANA_INTEL_MAX_WALLETS"), 12))
+            1, min(100, _integer(os.getenv("SOLANA_INTEL_MAX_WALLETS"), 50))
+        )
+        self.history_limit = max(
+            30, min(2_000, _integer(os.getenv("SOLANA_INTEL_HISTORY_LIMIT"), 500))
+        )
+        self.history_hours = max(
+            1, min(168, _integer(os.getenv("SOLANA_INTEL_HISTORY_HOURS"), 24))
+        )
+        self.reanalyze_seconds = max(
+            900, min(86_400, _integer(
+                os.getenv("SOLANA_INTEL_REANALYZE_SECONDS"), 21_600
+            ))
+        )
+        self.wallet_cache_seconds = max(
+            900, min(86_400, _integer(
+                os.getenv("SOLANA_INTEL_WALLET_CACHE_SECONDS"), 21_600
+            ))
+        )
+        self.max_concurrency = max(
+            1, min(10, _integer(os.getenv("SOLANA_INTEL_MAX_CONCURRENCY"), 4))
         )
         self.min_liquidity_usd = max(
             5_000, _number(os.getenv("SOLANA_INTEL_MIN_LIQUIDITY_USD"), 25_000)
@@ -112,6 +133,16 @@ class SolanaIntelService:
         self.cache_seconds = max(
             30, min(3600, _integer(os.getenv("SOLANA_INTEL_CACHE_SECONDS"), 300))
         )
+        self.supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+        self.supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        self.history_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "sentinel").strip()
+        self.history_object = os.getenv(
+            "SOLANA_INTEL_HISTORY_OBJECT", "solana-intel-history.json"
+        ).strip()
+        history_path = os.getenv("SOLANA_INTEL_HISTORY_PATH", "").strip()
+        self.history_path = Path(history_path) if history_path else None
+        self._history_state: dict = {"version": 1, "tokens": {}, "wallets": {}}
+        self._history_loaded = False
         self._cache: dict | None = None
         self._cache_at = 0.0
         self._lock = asyncio.Lock()
@@ -126,6 +157,103 @@ class SolanaIntelService:
             "birdeye": bool(self.birdeye_api_key),
             "helius": bool(self.helius_api_key),
         }
+
+    @property
+    def history_persistent(self) -> bool:
+        return bool(
+            (self.supabase_url and self.supabase_key and self.history_bucket)
+            or self.history_path
+        )
+
+    def _history_headers(self) -> dict[str, str]:
+        headers = {"apikey": self.supabase_key}
+        if self.supabase_key and not self.supabase_key.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {self.supabase_key}"
+        return headers
+
+    def _history_remote_url(self) -> str:
+        return (
+            f"{self.supabase_url}/storage/v1/object/"
+            f"{self.history_bucket}/{self.history_object}"
+        )
+
+    @staticmethod
+    def _valid_history_state(payload: Any) -> dict:
+        if not isinstance(payload, dict):
+            return {"version": 1, "tokens": {}, "wallets": {}}
+        tokens = payload.get("tokens")
+        wallets = payload.get("wallets")
+        return {
+            "version": 1,
+            "updated_at": _integer(payload.get("updated_at")),
+            "tokens": tokens if isinstance(tokens, dict) else {},
+            "wallets": wallets if isinstance(wallets, dict) else {},
+        }
+
+    async def _load_history(self) -> str | None:
+        if self._history_loaded:
+            return None
+        self._history_loaded = True
+        try:
+            if self.supabase_url and self.supabase_key and self.history_bucket:
+                response = await self.client.get(
+                    self._history_remote_url(),
+                    params={"snapshot": str(time.time_ns())},
+                    headers={**self._history_headers(), "Cache-Control": "no-cache, no-store"},
+                )
+                detail = response.text[:300]
+                missing = response.status_code == 404 or (
+                    response.status_code == 400
+                    and any(term in detail.lower() for term in (
+                        "not found", "does not exist", '"statuscode":"404"',
+                    ))
+                )
+                if not missing:
+                    if response.status_code >= 400:
+                        raise UpstreamError(
+                            f"Supabase Storage respondeu {response.status_code}: {detail}"
+                        )
+                    self._history_state = self._valid_history_state(response.json())
+            elif self.history_path and self.history_path.exists():
+                self._history_state = self._valid_history_state(
+                    json.loads(self.history_path.read_text(encoding="utf-8"))
+                )
+        except Exception as exc:
+            self._history_state = {"version": 1, "tokens": {}, "wallets": {}}
+            return f"{type(exc).__name__}: {exc}"
+        return None
+
+    async def _save_history(self) -> str | None:
+        self._history_state["updated_at"] = int(time.time())
+        encoded = json.dumps(
+            self._history_state, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        try:
+            if self.supabase_url and self.supabase_key and self.history_bucket:
+                response = await self.client.post(
+                    self._history_remote_url(),
+                    headers={
+                        **self._history_headers(),
+                        "x-upsert": "true",
+                        "Content-Type": "application/json",
+                    },
+                    content=encoded,
+                )
+                if response.status_code >= 400:
+                    raise UpstreamError(
+                        f"Supabase Storage respondeu {response.status_code}: "
+                        f"{response.text[:300]}"
+                    )
+            elif self.history_path:
+                self.history_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.history_path.with_suffix(
+                    f"{self.history_path.suffix}.tmp"
+                )
+                temporary.write_bytes(encoded)
+                temporary.replace(self.history_path)
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"
+        return None
 
     async def _get_json(
         self, url: str, *, params: dict[str, Any] | None = None,
@@ -436,7 +564,7 @@ class SolanaIntelService:
 
     def _build_opportunities(
         self, tokens: list[dict], observations: list[dict], wallets: list[dict]
-    ) -> tuple[list[dict], dict[str, int]]:
+    ) -> tuple[list[dict], dict[str, int], dict[str, list[str]]]:
         wallet_by_address = {
             wallet["wallet"]: wallet for wallet in wallets if wallet["qualified"]
         }
@@ -444,10 +572,12 @@ class SolanaIntelService:
         for observation in observations:
             observations_by_mint[observation["mint"]].append(observation)
         rejected: dict[str, int] = defaultdict(int)
+        rejected_by_mint: dict[str, list[str]] = {}
         opportunities = []
         for token in tokens:
             structural_rejections = self._structural_rejections(token)
             if structural_rejections:
+                rejected_by_mint[token["mint"]] = structural_rejections
                 for reason in structural_rejections:
                     rejected[reason] += 1
                 continue
@@ -463,6 +593,7 @@ class SolanaIntelService:
                 evidence_by_wallet.values(), key=lambda item: -item[0]["score"]
             )
             if not evidence:
+                rejected_by_mint[token["mint"]] = ["no_quality_wallet"]
                 rejected["no_quality_wallet"] += 1
                 continue
             top_evidence = evidence[:3]
@@ -489,6 +620,7 @@ class SolanaIntelService:
                 + evidence_points + activity_points,
             ))
             if opportunity_score < self.min_opportunity_score:
+                rejected_by_mint[token["mint"]] = ["below_opportunity_score"]
                 rejected["below_opportunity_score"] += 1
                 continue
             best_wallet = top_evidence[0][0]
@@ -540,7 +672,117 @@ class SolanaIntelService:
             -item["opportunity_score"], -item["quality_wallet_count"],
             -item["liquidity_usd"],
         ))
-        return opportunities, dict(sorted(rejected.items()))
+        return (
+            opportunities,
+            dict(sorted(rejected.items())),
+            rejected_by_mint,
+        )
+
+    def _merge_launch_history(self, recent_tokens: list[dict], now: int) -> None:
+        records = self._history_state.setdefault("tokens", {})
+        for token in recent_tokens:
+            mint = token["mint"]
+            record = records.get(mint)
+            if not isinstance(record, dict):
+                record = {
+                    "discovered_at": now,
+                    "analyzed_at": 0,
+                    "analysis": None,
+                    "wallets": [],
+                    "rejection_reasons": [],
+                }
+            record["token"] = token
+            record["last_seen_at"] = now
+            if self._structural_rejections(token):
+                record["analysis"] = None
+                record["wallets"] = []
+            records[mint] = record
+
+        cutoff = now - self.history_hours * 3600
+        retained = [
+            (mint, record) for mint, record in records.items()
+            if isinstance(record, dict)
+            and _integer(record.get("discovered_at"), now) >= cutoff
+            and isinstance(record.get("token"), dict)
+        ]
+        retained.sort(
+            key=lambda item: _integer(item[1].get("discovered_at")), reverse=True
+        )
+        self._history_state["tokens"] = dict(retained[: self.history_limit])
+
+        wallet_cache = self._history_state.setdefault("wallets", {})
+        wallet_cutoff = now - max(self.history_hours * 3600, self.wallet_cache_seconds * 2)
+        cached = [
+            (wallet, record) for wallet, record in wallet_cache.items()
+            if isinstance(record, dict)
+            and _integer(record.get("audited_at")) >= wallet_cutoff
+            and isinstance(record.get("profile"), dict)
+        ]
+        cached.sort(key=lambda item: _integer(item[1].get("audited_at")), reverse=True)
+        self._history_state["wallets"] = dict(cached[:1_000])
+
+    def _history_tokens(self) -> list[dict]:
+        records = self._history_state.get("tokens", {})
+        ordered = sorted(
+            (record for record in records.values() if isinstance(record, dict)),
+            key=lambda record: _integer(record.get("discovered_at")),
+            reverse=True,
+        )
+        return [record["token"] for record in ordered if isinstance(record.get("token"), dict)]
+
+    def _tokens_due_for_analysis(self, now: int) -> list[dict]:
+        due = []
+        for record in self._history_state.get("tokens", {}).values():
+            token = record.get("token") if isinstance(record, dict) else None
+            if not isinstance(token, dict):
+                continue
+            structural_rejections = self._structural_rejections(token)
+            analyzed_at = _integer(record.get("analyzed_at"))
+            if structural_rejections:
+                record["analyzed_at"] = now
+                record["analysis"] = None
+                record["wallets"] = []
+                record["rejection_reasons"] = structural_rejections
+                continue
+            if not analyzed_at or now - analyzed_at >= self.reanalyze_seconds:
+                due.append((not bool(analyzed_at), analyzed_at, record))
+        due.sort(key=lambda item: (
+            -int(item[0]), item[1], -_integer(item[2].get("discovered_at")),
+        ))
+        return [item[2]["token"] for item in due[: self.max_tokens]]
+
+    def _aggregate_history(self) -> tuple[list[dict], list[dict], dict[str, int]]:
+        opportunities = []
+        wallets_by_address: dict[str, dict] = {}
+        rejection_reasons: dict[str, int] = defaultdict(int)
+        records = self._history_state.get("tokens", {})
+        for record in records.values():
+            if not isinstance(record, dict):
+                continue
+            token = record.get("token")
+            if not isinstance(token, dict):
+                continue
+            analysis = record.get("analysis")
+            if isinstance(analysis, dict) and not self._structural_rejections(token):
+                opportunities.append({**token, **analysis})
+                for wallet in record.get("wallets", []):
+                    if not isinstance(wallet, dict) or not wallet.get("qualified"):
+                        continue
+                    current = wallets_by_address.get(wallet["wallet"])
+                    if current is None or wallet["score"] > current["score"]:
+                        wallets_by_address[wallet["wallet"]] = wallet
+            elif _integer(record.get("analyzed_at")):
+                for reason in record.get("rejection_reasons", []):
+                    rejection_reasons[str(reason)] += 1
+        opportunities.sort(key=lambda item: (
+            -item["opportunity_score"], -item["quality_wallet_count"],
+            -item["liquidity_usd"],
+        ))
+        wallets = sorted(
+            wallets_by_address.values(),
+            key=lambda row: (-row["score"], -row["outcomes"], row["wallet"]),
+        )
+        return opportunities, wallets, dict(sorted(rejection_reasons.items()))
 
     async def snapshot(self, *, force: bool = False) -> dict:
         now = time.time()
@@ -550,6 +792,7 @@ class SolanaIntelService:
             now = time.time()
             if not force and self._cache and now - self._cache_at < self.cache_seconds:
                 return self._cache
+            generated_at = int(time.time())
             errors: list[dict] = []
             providers = {
                 "jupiter": {"configured": bool(self.jupiter_api_key), "available": False,
@@ -558,23 +801,38 @@ class SolanaIntelService:
                             "mode": "api-key-required"},
                 "helius": {"configured": bool(self.helius_api_key), "available": None,
                            "mode": "reserved-for-wallet-audit"},
+                "history": {
+                    "configured": self.history_persistent,
+                    "available": True,
+                    "persistent": self.history_persistent,
+                    "mode": (
+                        "supabase-storage" if self.supabase_url and self.supabase_key
+                        else "local-file" if self.history_path else "memory"
+                    ),
+                },
             }
+            history_load_error = await self._load_history()
+            if history_load_error:
+                providers["history"]["available"] = False
+                errors.append({"provider": "history", "message": history_load_error})
             try:
-                tokens = await self._recent_tokens()
+                recent_tokens = await self._recent_tokens()
                 providers["jupiter"]["available"] = True
             except Exception as exc:
-                tokens = []
+                recent_tokens = []
                 errors.append({"provider": "jupiter", "message": str(exc)})
 
+            self._merge_launch_history(recent_tokens, generated_at)
+            tokens = self._history_tokens()
+            analysis_tokens = self._tokens_due_for_analysis(generated_at)
             observations: list[dict] = []
             enriched_tokens = 0
             wallet_profiles: list[dict] = []
             wallet_candidates: list[str] = []
-            structurally_eligible = [
-                token for token in tokens if not self._structural_rejections(token)
-            ]
-            if self.birdeye_api_key and structurally_eligible:
-                semaphore = asyncio.Semaphore(2)
+            successfully_enriched: set[str] = set()
+            failed_wallets: set[str] = set()
+            if self.birdeye_api_key and analysis_tokens:
+                semaphore = asyncio.Semaphore(self.max_concurrency)
 
                 async def enrich(token: dict):
                     async with semaphore:
@@ -584,7 +842,7 @@ class SolanaIntelService:
                             return token, [], str(exc)
 
                 results = await asyncio.gather(*(
-                    enrich(token) for token in structurally_eligible
+                    enrich(token) for token in analysis_tokens
                 ))
                 for token, traders, error in results:
                     if error:
@@ -592,11 +850,25 @@ class SolanaIntelService:
                                        "message": error})
                         continue
                     enriched_tokens += 1
+                    successfully_enriched.add(token["mint"])
                     for trader in traders:
                         observation = self._observation(token, trader)
                         if observation:
                             observations.append(observation)
                 wallet_candidates = self._wallet_candidates(observations)
+                wallet_cache = self._history_state.setdefault("wallets", {})
+                wallets_to_audit = []
+                for wallet in wallet_candidates:
+                    cached = wallet_cache.get(wallet)
+                    if (
+                        isinstance(cached, dict)
+                        and generated_at - _integer(cached.get("audited_at"))
+                        < self.wallet_cache_seconds
+                        and isinstance(cached.get("profile"), dict)
+                    ):
+                        wallet_profiles.append(cached["profile"])
+                    else:
+                        wallets_to_audit.append(wallet)
 
                 async def audit_wallet(wallet: str):
                     async with semaphore:
@@ -606,43 +878,113 @@ class SolanaIntelService:
                             return wallet, {}, str(exc)
 
                 audits = await asyncio.gather(*(
-                    audit_wallet(wallet) for wallet in wallet_candidates
+                    audit_wallet(wallet) for wallet in wallets_to_audit
                 ))
                 for wallet, history, error in audits:
                     if error:
+                        failed_wallets.add(wallet)
                         errors.append({
                             "provider": "birdeye", "wallet": wallet, "message": error,
                         })
                         continue
-                    wallet_profiles.append(
-                        self._wallet_profile(wallet, history, observations)
-                    )
+                    profile = self._wallet_profile(wallet, history, observations)
+                    wallet_profiles.append(profile)
+                    wallet_cache[wallet] = {
+                        "audited_at": generated_at,
+                        "profile": profile,
+                    }
                 providers["birdeye"]["available"] = enriched_tokens > 0
-            elif self.birdeye_api_key and tokens and not structurally_eligible:
+            elif self.birdeye_api_key:
                 providers["birdeye"]["available"] = True
 
-            wallets = sorted(
-                (wallet for wallet in wallet_profiles if wallet["qualified"]),
-                key=lambda row: (-row["score"], -row["outcomes"], row["wallet"]),
+            blocked_mints = {
+                observation["mint"] for observation in observations
+                if observation["wallet"] in failed_wallets
+            }
+            evaluated_tokens = [
+                token for token in analysis_tokens
+                if token["mint"] in successfully_enriched
+                and token["mint"] not in blocked_mints
+            ]
+            batch_opportunities, _, rejected_by_mint = self._build_opportunities(
+                evaluated_tokens, observations, wallet_profiles
             )
-            opportunities, rejection_reasons = self._build_opportunities(
-                tokens, observations, wallet_profiles
+            opportunity_by_mint = {
+                opportunity["mint"]: opportunity
+                for opportunity in batch_opportunities
+            }
+            profile_by_wallet = {
+                profile["wallet"]: profile for profile in wallet_profiles
+            }
+            token_records = self._history_state.get("tokens", {})
+            for token in evaluated_tokens:
+                mint = token["mint"]
+                record = token_records.get(mint)
+                if not isinstance(record, dict):
+                    continue
+                record["analyzed_at"] = generated_at
+                opportunity = opportunity_by_mint.get(mint)
+                if opportunity:
+                    analysis_fields = {
+                        key: opportunity[key] for key in (
+                            "opportunity_score", "conviction", "quality_wallet_count",
+                            "early_quality_wallet_count", "best_wallet_score", "reasons",
+                            "wallet_evidence",
+                        )
+                    }
+                    evidence_wallets = {
+                        item["wallet"] for item in opportunity["wallet_evidence"]
+                    }
+                    record["analysis"] = analysis_fields
+                    record["wallets"] = [
+                        profile_by_wallet[wallet] for wallet in evidence_wallets
+                        if wallet in profile_by_wallet
+                    ]
+                    record["rejection_reasons"] = []
+                else:
+                    record["analysis"] = None
+                    record["wallets"] = []
+                    record["rejection_reasons"] = rejected_by_mint.get(
+                        mint, ["no_quality_wallet"]
+                    )
+
+            history_save_error = None
+            if not history_load_error:
+                history_save_error = await self._save_history()
+            if history_save_error:
+                providers["history"]["available"] = False
+                errors.append({"provider": "history", "message": history_save_error})
+
+            opportunities, wallets, rejection_reasons = self._aggregate_history()
+            token_records = self._history_state.get("tokens", {})
+            analyzed_tokens = sum(
+                _integer(record.get("analyzed_at")) > 0
+                for record in token_records.values() if isinstance(record, dict)
             )
-            generated_at = int(time.time())
+            structurally_eligible = sum(
+                not self._structural_rejections(token) for token in tokens
+            )
             payload = {
                 "generated_at": generated_at,
                 "cache_expires_at": generated_at + self.cache_seconds,
                 "read_only": True,
                 "providers": providers,
                 "summary": {
-                    "recent_tokens": len(tokens),
-                    "structurally_eligible": len(structurally_eligible),
+                    "recent_tokens": len(recent_tokens),
+                    "launches_in_window": len(tokens),
+                    "history_window_hours": self.history_hours,
+                    "history_capacity": self.history_limit,
+                    "collection_batch": self.max_tokens,
+                    "analyzed_tokens": analyzed_tokens,
+                    "pending_tokens": max(0, len(tokens) - analyzed_tokens),
+                    "analyzed_this_cycle": len(evaluated_tokens),
+                    "structurally_eligible": structurally_eligible,
                     "enriched_tokens": enriched_tokens,
                     "wallet_candidates": len(wallet_candidates),
                     "wallets_evaluated": len(wallet_profiles),
                     "quality_wallets": len(wallets),
                     "opportunities": len(opportunities),
-                    "rejected_tokens": max(0, len(tokens) - len(opportunities)),
+                    "rejected_tokens": max(0, analyzed_tokens - len(opportunities)),
                     "early_wallets": sum(wallet["early_buys"] > 0 for wallet in wallets),
                     "robust_wallets": sum(wallet["confidence"] == "robust" for wallet in wallets),
                 },
@@ -653,6 +995,13 @@ class SolanaIntelService:
                 "methodology": {
                     "early_window_seconds": 120,
                     "wallet_history_window": "90d",
+                    "launch_history_window_hours": self.history_hours,
+                    "launch_history_capacity": self.history_limit,
+                    "token_batch_per_cycle": self.max_tokens,
+                    "wallets_per_cycle": self.max_wallets,
+                    "max_concurrency": self.max_concurrency,
+                    "reanalyze_seconds": self.reanalyze_seconds,
+                    "history_persistent": self.history_persistent,
                     "ranking": (
                         "Wilson ajustado + amostra de compras/vendas + PnL realizado "
                         "+ disciplina de saída"

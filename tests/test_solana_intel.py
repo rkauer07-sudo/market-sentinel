@@ -1,3 +1,4 @@
+import json
 from urllib.parse import parse_qs
 
 import httpx
@@ -12,6 +13,16 @@ WALLET = "4" * 44
 RISKY_WALLET = "5" * 44
 MINT_A = "6" * 44
 MINT_B = "7" * 44
+
+
+@pytest.fixture(autouse=True)
+def isolated_solana_history(monkeypatch):
+    for name in (
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SOLANA_INTEL_HISTORY_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def token(mint: str, symbol: str, created_at: str) -> dict:
@@ -60,11 +71,94 @@ async def test_snapshot_uses_jupiter_without_birdeye(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_defaults_use_max_collection_and_accumulate_launches(monkeypatch):
+    monkeypatch.delenv("SOLANA_INTEL_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("SOLANA_INTEL_MAX_WALLETS", raising=False)
+    batches = [
+        [token(MINT_A, "A", "2026-01-01T00:00:00Z")],
+        [token(MINT_B, "B", "2026-01-01T00:01:00Z")],
+    ]
+
+    def handler(request: httpx.Request):
+        assert request.url.path == "/tokens/v2/recent"
+        return httpx.Response(200, json=batches.pop(0))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = SolanaIntelService(client)
+        first = await service.snapshot()
+        second = await service.snapshot(force=True)
+
+    assert service.max_tokens == 30
+    assert service.max_wallets == 50
+    assert service.history_limit == 500
+    assert first["summary"]["launches_in_window"] == 1
+    assert second["summary"]["launches_in_window"] == 2
+    assert second["summary"]["pending_tokens"] == 2
+    assert {row["mint"] for row in second["tokens"]} == {MINT_A, MINT_B}
+
+
+@pytest.mark.asyncio
+async def test_launch_history_survives_a_new_service_instance(tmp_path, monkeypatch):
+    history_path = tmp_path / "solana-launches.json"
+    monkeypatch.setenv("SOLANA_INTEL_HISTORY_PATH", str(history_path))
+
+    def first_handler(request: httpx.Request):
+        return httpx.Response(200, json=[
+            token(MINT_A, "A", "2026-01-01T00:00:00Z"),
+        ])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(first_handler)) as client:
+        first = await SolanaIntelService(client).snapshot()
+
+    def second_handler(request: httpx.Request):
+        return httpx.Response(200, json=[
+            token(MINT_B, "B", "2026-01-01T00:01:00Z"),
+        ])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(second_handler)) as client:
+        second = await SolanaIntelService(client).snapshot()
+
+    assert first["providers"]["history"]["persistent"] is True
+    assert history_path.exists()
+    assert second["summary"]["launches_in_window"] == 2
+    assert {row["mint"] for row in second["tokens"]} == {MINT_A, MINT_B}
+
+
+@pytest.mark.asyncio
+async def test_launch_history_is_saved_to_supabase_storage(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://supabase.test")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_test")
+    monkeypatch.setenv("SUPABASE_STORAGE_BUCKET", "sentinel")
+    saved = {}
+
+    def handler(request: httpx.Request):
+        if request.url.host == "supabase.test":
+            assert request.headers["apikey"] == "sb_secret_test"
+            assert "authorization" not in request.headers
+            if request.method == "GET":
+                return httpx.Response(404, json={"message": "not found"})
+            saved.update(json.loads(request.content))
+            return httpx.Response(200, json={"Key": "solana-intel-history.json"})
+        assert request.url.path == "/tokens/v2/recent"
+        return httpx.Response(200, json=[
+            token(MINT_A, "A", "2026-01-01T00:00:00Z"),
+        ])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        snapshot = await SolanaIntelService(client).snapshot()
+
+    assert snapshot["providers"]["history"]["persistent"] is True
+    assert snapshot["providers"]["history"]["mode"] == "supabase-storage"
+    assert MINT_A in saved["tokens"]
+
+
+@pytest.mark.asyncio
 async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities(monkeypatch):
     monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
     monkeypatch.setenv("JUPITER_API_KEY", "jupiter-test")
     monkeypatch.setenv("SOLANA_INTEL_MAX_TOKENS", "2")
     first_pool = 1767225600  # 2026-01-01T00:00:00Z
+    api_calls = {"top_traders": 0, "wallet_summary": 0}
 
     def handler(request: httpx.Request):
         if request.url.path == "/tokens/v2/recent":
@@ -76,6 +170,7 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
         assert request.headers["x-api-key"] == "birdeye-test"
         query = parse_qs(request.url.query.decode())
         if request.url.path == "/wallet/v2/pnl/summary":
+            api_calls["wallet_summary"] += 1
             assert query["wallet"] == [WALLET]
             assert query["duration"] == ["90d"]
             assert query["position_scope"] == ["cumulative"]
@@ -97,6 +192,7 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
                 },
             }})
         assert request.url.path == "/defi/v2/tokens/top_traders"
+        api_calls["top_traders"] += 1
         assert query["wallet_tags"] == ["sniper,smart_trader"]
         mint = query["address"][0]
         pnl = 1200 if mint == MINT_A else 800
@@ -120,7 +216,9 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
         return httpx.Response(200, json={"data": {"items": rows}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        snapshot = await SolanaIntelService(client).snapshot()
+        service = SolanaIntelService(client)
+        snapshot = await service.snapshot()
+        cached_snapshot = await service.snapshot(force=True)
 
     assert snapshot["summary"]["enriched_tokens"] == 2
     assert snapshot["summary"]["wallets_evaluated"] == 1
@@ -140,6 +238,8 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
     assert {row["mint"] for row in snapshot["opportunities"]} == {MINT_A, MINT_B}
     assert all(row["quality_wallet_count"] == 1 for row in snapshot["opportunities"])
     assert all(row["opportunity_score"] >= 72 for row in snapshot["opportunities"])
+    assert cached_snapshot["summary"]["opportunities"] == 2
+    assert api_calls == {"top_traders": 2, "wallet_summary": 1}
 
 
 @pytest.mark.asyncio

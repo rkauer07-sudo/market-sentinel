@@ -1,12 +1,27 @@
 import argparse
 import asyncio
+import json
 import logging
 import os
+
+import httpx
+
 from .app import Sentinel
 from .config import load_settings
+from .solana_intel import SolanaIntelService
 
 
 async def execute(args):
+    if args.command == "solana-intel-once":
+        async with httpx.AsyncClient(
+            timeout=30,
+            headers={"User-Agent": "market-sentinel/0.3"},
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        ) as client:
+            snapshot = await SolanaIntelService(client).snapshot(force=True)
+        print(json.dumps(snapshot["summary"], ensure_ascii=False, sort_keys=True))
+        return
+
     settings = load_settings(args.config); sentinel = Sentinel(settings)
     try:
         if args.command == "once":
@@ -27,7 +42,9 @@ async def execute(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Monitor técnico read-only para cripto e RWAs")
-    parser.add_argument("command", nargs="?", choices=["run", "once", "markets", "audit-failures"], default="run")
+    parser.add_argument("command", nargs="?", choices=[
+        "run", "once", "markets", "audit-failures", "solana-intel-once",
+    ], default="run")
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")

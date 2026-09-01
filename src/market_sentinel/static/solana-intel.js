@@ -63,18 +63,21 @@
   };
 
   function providerClass(provider) {
+    if (provider.mode === 'memory') return 'waiting';
     if (provider.available === true) return 'ready';
     if (provider.available === false) return 'error';
     return 'waiting';
   }
 
   function renderProviders(providers = {}) {
-    ['jupiter', 'birdeye', 'helius'].forEach(name => {
+    ['jupiter', 'birdeye', 'history', 'helius'].forEach(name => {
       const element = document.querySelector(`#provider-${name}`);
       const provider = providers[name] || {};
       if (!element) return;
       element.className = `provider-chip ${providerClass(provider)}`;
-      const state = provider.available === true ? 'ativo' : provider.available === false
+      const state = name === 'history' && provider.available === true
+        ? provider.persistent ? 'persistente' : 'memória temporária'
+        : provider.available === true ? 'ativo' : provider.available === false
         ? 'falha' : provider.configured ? 'configurado' : name === 'jupiter' ? 'keyless' : 'sem chave';
       element.textContent = `${name} · ${state}`;
     });
@@ -162,11 +165,11 @@
     renderProviders(data.providers);
     const summary = data.summary || {};
     const values = {
-      '#intelRecentTokens': summary.recent_tokens || 0,
-      '#intelEligibleTokens': summary.structurally_eligible || 0,
+      '#intelRecentTokens': summary.launches_in_window || 0,
+      '#intelEligibleTokens': summary.analyzed_tokens || 0,
       '#intelOpportunities': summary.opportunities || 0,
       '#intelQualityWallets': summary.quality_wallets || 0,
-      '#intelRejectedTokens': summary.rejected_tokens || 0,
+      '#intelRejectedTokens': summary.pending_tokens || 0,
     };
     Object.entries(values).forEach(([selector, value]) => {
       const element = document.querySelector(selector);
@@ -174,13 +177,16 @@
     });
     const setup = document.querySelector('#solanaIntelSetup');
     const birdeyeConfigured = Boolean(data.providers?.birdeye?.configured);
+    const historyPersistent = Boolean(data.providers?.history?.persistent);
     const jupiterAvailable = data.providers?.jupiter?.available === true;
     const errors = data.errors || [];
-    setup.classList.toggle('show', !jupiterAvailable || !birdeyeConfigured || errors.length > 0);
+    setup.classList.toggle('show', !jupiterAvailable || !birdeyeConfigured || !historyPersistent || errors.length > 0);
     setup.innerHTML = !jupiterAvailable
       ? `<span class="solana-error">Jupiter indisponível nesta atualização: ${escapeHTML(errors.find(error => error.provider === 'jupiter')?.message || 'não foi possível consultar os lançamentos agora.')}</span>`
       : !birdeyeConfigured
         ? 'Jupiter está ativa para descoberta e rotas. Nenhum token será promovido sem a evidência histórica da carteira; configure <code>BIRDEYE_API_KEY</code> no backend. Helius permanece opcional.'
+        : !historyPersistent
+          ? 'A coleta ampliada está usando memória temporária. Para preservar a janela de centenas de lançamentos entre reinicializações, configure <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code> e o bucket indicado por <code>SUPABASE_STORAGE_BUCKET</code>.'
         : errors.length
           ? `<span class="solana-error">Atualização parcial: ${escapeHTML(errors[0].provider)} · ${escapeHTML(errors[0].message)}</span>`
           : '';
@@ -188,7 +194,7 @@
     renderTokens(data.opportunities, birdeyeConfigured);
     const generated = document.querySelector('#solanaGeneratedAt');
     if (generated) generated.textContent = data.generated_at
-      ? `Atualizado ${new Date(data.generated_at * 1000).toLocaleTimeString(locale(), {hour: '2-digit', minute: '2-digit'})}`
+      ? `Atualizado ${new Date(data.generated_at * 1000).toLocaleTimeString(locale(), {hour: '2-digit', minute: '2-digit'})} · ${compact(summary.analyzed_this_cycle)} neste ciclo · janela ${compact(summary.launches_in_window)}/${compact(summary.history_capacity)}`
       : 'Ainda não atualizado';
   }
 

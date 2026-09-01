@@ -79,6 +79,10 @@ read-only independente do radar de futuros:
 - apenas tokens com estrutura mínima e pelo menos uma carteira qualificada são
   promovidos a oportunidade; tags `dev`, `insider` e `bundler` desqualificam a
   carteira;
+- cada coleta lê até 30 lançamentos recentes, remove duplicatas e os acumula em
+  uma janela persistente de 24 horas com capacidade padrão de 500 tokens;
+- tokens já analisados e históricos recentes de carteiras são reutilizados para
+  controlar o consumo de Compute Units da Birdeye;
 - Helius fica reservado para a próxima camada de auditoria histórica completa.
 
 Crie uma chave gratuita no portal da Jupiter e uma chave Birdeye para liberar o
@@ -88,8 +92,14 @@ ranking completo. Configure-as apenas no backend:
 JUPITER_API_KEY=...
 BIRDEYE_API_KEY=...
 HELIUS_API_KEY=...              # opcional nesta versão
-SOLANA_INTEL_MAX_TOKENS=12
-SOLANA_INTEL_MAX_WALLETS=12
+SOLANA_INTEL_MAX_TOKENS=30
+SOLANA_INTEL_MAX_WALLETS=50
+SOLANA_INTEL_HISTORY_LIMIT=500
+SOLANA_INTEL_HISTORY_HOURS=24
+SOLANA_INTEL_REANALYZE_SECONDS=21600
+SOLANA_INTEL_WALLET_CACHE_SECONDS=21600
+SOLANA_INTEL_MAX_CONCURRENCY=4
+SOLANA_INTEL_HISTORY_OBJECT=solana-intel-history.json
 SOLANA_INTEL_MIN_LIQUIDITY_USD=25000
 SOLANA_INTEL_MIN_TOKEN_SAFETY=70
 SOLANA_INTEL_MIN_WALLET_SCORE=60
@@ -102,6 +112,19 @@ Sem `JUPITER_API_KEY`, o serviço tenta o acesso keyless com limite menor. Sem
 evidência histórica das carteiras. O histórico pode não estar totalmente
 retroalimentado pelo provedor; por isso o resultado é um filtro investigativo,
 não uma garantia de retorno.
+
+A janela usa o mesmo Supabase Storage já configurado pelo projeto. Com
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_STORAGE_BUCKET`, o objeto
+`solana-intel-history.json` é criado automaticamente e sobrevive aos reinícios da
+Vercel. Sem essas variáveis, a coleta funciona em memória, mas volta a zero em um
+cold start.
+
+O worker contínuo do GitHub Actions também executa `market-sentinel
+solana-intel-once` em cada ciclo. Para que ele faça o enriquecimento completo sem
+depender de a página estar aberta, adicione `JUPITER_API_KEY` e `BIRDEYE_API_KEY`
+também em **GitHub → Settings → Secrets and variables → Actions**. Sem a chave
+Birdeye, o worker ainda coleta e deduplica lançamentos, mas deixa a análise das
+carteiras pendente.
 
 Para produção na Vercel, abra **Project Settings > Environment Variables**, crie
 `BIRDEYE_API_KEY` (obrigatória para o ranking completo) e, de preferência,
