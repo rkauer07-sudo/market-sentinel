@@ -73,8 +73,12 @@ read-only independente do radar de futuros:
   Organic Score e autoridades do token;
 - Jupiter Swap V2 valida, sob demanda, a existência de rotas de compra e venda
   por cotação sem `taker`; nenhuma transação é criada, assinada ou enviada;
-- Birdeye, quando configurada, cruza os lançamentos com traders `sniper` e
-  `smart_trader`, PnL e horário aproximado da primeira entrada;
+- Birdeye cruza os lançamentos com traders `sniper` e `smart_trader` e valida
+  cada carteira pelo histórico de PnL de 90 dias, incluindo compras, vendas,
+  resultados encerrados, taxa de acerto e lucro realizado;
+- apenas tokens com estrutura mínima e pelo menos uma carteira qualificada são
+  promovidos a oportunidade; tags `dev`, `insider` e `bundler` desqualificam a
+  carteira;
 - Helius fica reservado para a próxima camada de auditoria histórica completa.
 
 Crie uma chave gratuita no portal da Jupiter e uma chave Birdeye para liberar o
@@ -85,12 +89,19 @@ JUPITER_API_KEY=...
 BIRDEYE_API_KEY=...
 HELIUS_API_KEY=...              # opcional nesta versão
 SOLANA_INTEL_MAX_TOKENS=12
+SOLANA_INTEL_MAX_WALLETS=12
+SOLANA_INTEL_MIN_LIQUIDITY_USD=25000
+SOLANA_INTEL_MIN_TOKEN_SAFETY=70
+SOLANA_INTEL_MIN_WALLET_SCORE=60
+SOLANA_INTEL_MIN_OPPORTUNITY_SCORE=72
 SOLANA_INTEL_CACHE_SECONDS=300
 ```
 
 Sem `JUPITER_API_KEY`, o serviço tenta o acesso keyless com limite menor. Sem
-`BIRDEYE_API_KEY`, a página continua mostrando lançamentos e validação de rotas, mas
-explica que o ranking de carteiras ainda não está habilitado.
+`BIRDEYE_API_KEY`, nenhum lançamento é promovido a oportunidade, pois falta a
+evidência histórica das carteiras. O histórico pode não estar totalmente
+retroalimentado pelo provedor; por isso o resultado é um filtro investigativo,
+não uma garantia de retorno.
 
 Para produção na Vercel, abra **Project Settings > Environment Variables**, crie
 `BIRDEYE_API_KEY` (obrigatória para o ranking completo) e, de preferência,

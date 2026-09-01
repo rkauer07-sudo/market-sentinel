@@ -27,12 +27,12 @@
       <div class="memecoin-intro-copy">
         <div class="memecoin-overline">SOLANA · LAUNCH FORENSICS · PUBLIC LEDGER</div>
         <h1>MEMECOINS<br><em>ANALYSER</em></h1>
-        <p>Um ambiente separado para investigar memecoins recém-lançadas, identificar compradores precoces recorrentes e rejeitar sinais contaminados por baixa liquidez ou carteiras ligadas ao lançamento.</p>
+        <p>Um filtro de convicção para memecoins recém-lançadas: só promove moedas seguras o bastante e acompanhadas por carteiras com histórico consistente de compra, venda e lucro realizado.</p>
         <div class="memecoin-principles">
           <span><b>01</b> primeiro pool</span>
           <span><b>02</b> entrada precoce</span>
-          <span><b>03</b> recorrência</span>
-          <span><b>04</b> rota executável</span>
+          <span><b>03</b> histórico 90d</span>
+          <span><b>04</b> filtro de convicção</span>
         </div>
       </div>
       <aside class="memecoin-orbit" aria-label="Metodologia resumida">
@@ -49,8 +49,8 @@
       <div class="solana-intel-hero">
         <div>
           <div class="solana-kicker">LIVE DATA PIPELINE</div>
-          <h2>Lançamentos e carteiras precoces</h2>
-          <p class="solana-intel-intro">A Jupiter fornece descoberta e rotas. A Birdeye adiciona traders e PnL. Tags de dev, insider e bundler reduzem o score; nenhuma carteira é conectada e nenhuma transação é criada.</p>
+          <h2>Oportunidades com evidência on-chain</h2>
+          <p class="solana-intel-intro">A Jupiter descobre lançamentos e valida rotas. A Birdeye confirma o histórico de 90 dias das carteiras. Só aparecem moedas que vencem os cortes de segurança, liquidez, amostra, compra e venda; dev, insider e bundler são excluídos.</p>
           <div class="provider-strip">
             <span id="provider-jupiter" class="provider-chip waiting">Jupiter · verificando</span>
             <span id="provider-birdeye" class="provider-chip waiting">Birdeye · verificando</span>
@@ -64,23 +64,23 @@
       </div>
       <div id="solanaIntelSetup" class="solana-setup"></div>
       <div class="solana-metrics">
-        <div class="solana-metric"><span>Lançamentos recentes</span><b id="intelRecentTokens" class="accent">—</b></div>
-        <div class="solana-metric"><span>Tokens enriquecidos</span><b id="intelEnrichedTokens">—</b></div>
-        <div class="solana-metric"><span>Carteiras candidatas</span><b id="intelWallets">—</b></div>
-        <div class="solana-metric"><span>Compradores precoces</span><b id="intelEarlyWallets">—</b></div>
-        <div class="solana-metric"><span>Amostra robusta</span><b id="intelRobustWallets">—</b></div>
+        <div class="solana-metric"><span>Lançamentos analisados</span><b id="intelRecentTokens">—</b></div>
+        <div class="solana-metric"><span>Estrutura aprovada</span><b id="intelEligibleTokens">—</b></div>
+        <div class="solana-metric"><span>Oportunidades</span><b id="intelOpportunities" class="accent">—</b></div>
+        <div class="solana-metric"><span>Carteiras de qualidade</span><b id="intelQualityWallets">—</b></div>
+        <div class="solana-metric"><span>Moedas rejeitadas</span><b id="intelRejectedTokens">—</b></div>
       </div>
       <div class="solana-intel-grid">
         <div class="solana-column">
-          <div class="solana-column-head"><span>Ranking de carteiras precoces</span><span>assertividade ajustada · PnL · recorrência</span></div>
+          <div class="solana-column-head"><span>Carteiras que sustentam o sinal</span><span>histórico 90d · saída comprovada · Wilson</span></div>
           <div id="smartWalletList" class="smart-wallet-list"><div class="intel-empty"><strong>Carregando carteiras</strong>Aguardando dados dos provedores.</div></div>
         </div>
         <div class="solana-column">
-          <div class="solana-column-head"><span>Launch radar · Jupiter</span><span>primeiro pool · risco · rota</span></div>
-          <div id="solanaLaunchList" class="launch-list"><div class="intel-empty"><strong>Carregando lançamentos</strong>Consultando Tokens V2.</div></div>
+          <div class="solana-column-head"><span>Oportunidades filtradas</span><span>carteira · estrutura · convicção · rota</span></div>
+          <div id="solanaLaunchList" class="launch-list"><div class="intel-empty"><strong>Aplicando filtro de qualidade</strong>Cruzando Tokens V2 com o histórico das carteiras.</div></div>
         </div>
       </div>
-      <div class="solana-method"><strong>Score investigativo, não recomendação de compra.</strong><span>Janela early: até 120s após o primeiro pool · atraso aproximado · cotação de rota sob demanda</span></div>
+      <div class="solana-method"><strong>Score investigativo, não recomendação de compra.</strong><span>Histórico Birdeye de 90d pode ser incompleto · piso estatístico de Wilson · janela early até 120s · rota cotada sob demanda</span></div>
     </section>
 
     <footer class="memecoin-footer">

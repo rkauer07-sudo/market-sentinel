@@ -53,13 +53,14 @@ async def test_snapshot_uses_jupiter_without_birdeye(monkeypatch):
     assert snapshot["read_only"] is True
     assert snapshot["summary"]["recent_tokens"] == 1
     assert snapshot["wallets"] == []
+    assert snapshot["opportunities"] == []
     assert snapshot["providers"]["jupiter"]["available"] is True
     assert snapshot["providers"]["birdeye"]["configured"] is False
     assert snapshot["tokens"][0]["safety_score"] == 100
 
 
 @pytest.mark.asyncio
-async def test_birdeye_wallets_are_aggregated_and_risky_tags_are_penalized(monkeypatch):
+async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities(monkeypatch):
     monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
     monkeypatch.setenv("JUPITER_API_KEY", "jupiter-test")
     monkeypatch.setenv("SOLANA_INTEL_MAX_TOKENS", "2")
@@ -72,9 +73,30 @@ async def test_birdeye_wallets_are_aggregated_and_risky_tags_are_penalized(monke
                 token(MINT_A, "A", "2026-01-01T00:00:00Z"),
                 token(MINT_B, "B", "2026-01-01T00:00:00Z"),
             ])
-        assert request.url.path == "/defi/v2/tokens/top_traders"
         assert request.headers["x-api-key"] == "birdeye-test"
         query = parse_qs(request.url.query.decode())
+        if request.url.path == "/wallet/v2/pnl/summary":
+            assert query["wallet"] == [WALLET]
+            assert query["duration"] == ["90d"]
+            assert query["position_scope"] == ["cumulative"]
+            assert query["pnl_method"] == ["wac"]
+            return httpx.Response(200, json={"data": {
+                "counts": {
+                    "total_buy": 120,
+                    "total_sell": 75,
+                    "total_trade": 195,
+                    "total_win": 40,
+                    "total_loss": 20,
+                    "win_rate": 40 / 60,
+                },
+                "pnl": {
+                    "realized_profit_usd": 42_000,
+                    "unrealized_usd": 3_000,
+                    "total_usd": 45_000,
+                    "avg_profit_per_trade_usd": 700,
+                },
+            }})
+        assert request.url.path == "/defi/v2/tokens/top_traders"
         assert query["wallet_tags"] == ["sniper,smart_trader"]
         mint = query["address"][0]
         pnl = 1200 if mint == MINT_A else 800
@@ -101,15 +123,62 @@ async def test_birdeye_wallets_are_aggregated_and_risky_tags_are_penalized(monke
         snapshot = await SolanaIntelService(client).snapshot()
 
     assert snapshot["summary"]["enriched_tokens"] == 2
+    assert snapshot["summary"]["wallets_evaluated"] == 1
+    assert snapshot["summary"]["quality_wallets"] == 1
+    assert snapshot["summary"]["opportunities"] == 2
     assert snapshot["providers"]["birdeye"]["available"] is True
-    main = next(row for row in snapshot["wallets"] if row["wallet"] == WALLET)
-    risky = next(row for row in snapshot["wallets"] if row["wallet"] == RISKY_WALLET)
-    assert main["tokens_traded"] == 2
-    assert main["wins"] == 2
+    main = snapshot["wallets"][0]
+    assert main["wallet"] == WALLET
+    assert main["outcomes"] == 60
+    assert main["total_buy"] == 120
+    assert main["total_sell"] == 75
+    assert main["win_rate_pct"] == 66.7
     assert main["early_buys"] == 2
     assert main["median_entry_seconds"] == 52.5
-    assert risky["risk_penalty"] == 28
-    assert main["score"] > risky["score"]
+    assert main["qualified"] is True
+    assert all(row["wallet"] != RISKY_WALLET for row in snapshot["wallets"])
+    assert {row["mint"] for row in snapshot["opportunities"]} == {MINT_A, MINT_B}
+    assert all(row["quality_wallet_count"] == 1 for row in snapshot["opportunities"])
+    assert all(row["opportunity_score"] >= 72 for row in snapshot["opportunities"])
+
+
+@pytest.mark.asyncio
+async def test_weak_wallet_history_does_not_promote_token(monkeypatch):
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    monkeypatch.setenv("SOLANA_INTEL_MAX_TOKENS", "1")
+    first_pool = 1767225600
+
+    def handler(request: httpx.Request):
+        if request.url.path == "/tokens/v2/recent":
+            return httpx.Response(200, json=[
+                token(MINT_A, "A", "2026-01-01T00:00:00Z"),
+            ])
+        if request.url.path == "/defi/v2/tokens/top_traders":
+            return httpx.Response(200, json={"data": {"items": [{
+                "owner": WALLET,
+                "realizedPnl": 5_000,
+                "firstTradeUnixTime": first_pool + 20,
+                "walletTags": ["sniper", "smart_trader"],
+            }]}})
+        assert request.url.path == "/wallet/v2/pnl/summary"
+        return httpx.Response(200, json={"data": {
+            "total_buy": 6,
+            "total_sell": 2,
+            "total_win": 3,
+            "total_loss": 3,
+            "win_rate": 0.5,
+            "realized_profit_usd": 400,
+            "avg_profit_per_trade": 66,
+        }})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        snapshot = await SolanaIntelService(client).snapshot()
+
+    assert snapshot["summary"]["wallets_evaluated"] == 1
+    assert snapshot["summary"]["quality_wallets"] == 0
+    assert snapshot["summary"]["opportunities"] == 0
+    assert snapshot["opportunities"] == []
+    assert snapshot["methodology"]["rejection_reasons"]["no_quality_wallet"] == 1
 
 
 @pytest.mark.asyncio

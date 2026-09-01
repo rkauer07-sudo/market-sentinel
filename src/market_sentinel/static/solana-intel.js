@@ -56,9 +56,10 @@
     high_holder_concentration: 'concentração alta',
     thin_liquidity: 'liquidez baixa',
     low_organic_activity: 'atividade pouco orgânica',
+    low_safety_score: 'segurança abaixo do corte',
   };
   const confidenceLabels = {
-    robust: 'amostra robusta', building: 'amostra crescendo', insufficient: 'amostra insuficiente',
+    robust: 'amostra robusta', established: 'amostra validada', insufficient: 'amostra insuficiente',
   };
 
   function providerClass(provider) {
@@ -87,7 +88,7 @@
       return;
     }
     if (!wallets.length) {
-      box.innerHTML = '<div class="intel-empty"><strong>Nenhuma carteira passou pelo lote atual</strong>Isso pode ser falta de dados, rate limit ou ausência de recorrência entre os lançamentos recentes.</div>';
+      box.innerHTML = '<div class="intel-empty"><strong>Nenhuma carteira atingiu o padrão de qualidade</strong>O filtro exige histórico de 90 dias, pelo menos 10 resultados, compras e vendas suficientes, acerto mínimo de 55% e PnL realizado positivo.</div>';
       return;
     }
     box.innerHTML = wallets.slice(0, 20).map((wallet, index) => {
@@ -98,15 +99,16 @@
         <div>
           <div class="wallet-address"><a href="${escapeHTML(wallet.solscan_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(short(wallet.wallet))}</a><div class="intel-tags">${tags || '<span class="intel-tag">sem tag</span>'}</div></div>
           <div class="wallet-stats">
-            <div class="wallet-stat"><span>Tokens</span><b>${wallet.tokens_traded}</b></div>
-            <div class="wallet-stat"><span>Acerto bruto</span><b>${Number(wallet.win_rate_pct).toFixed(1)}%</b></div>
-            <div class="wallet-stat"><span>Acerto ajustado</span><b>${Number(wallet.confidence_win_rate_pct).toFixed(1)}%</b></div>
-            <div class="wallet-stat"><span>Entrada mediana</span><b>${seconds(wallet.median_entry_seconds)}</b></div>
+            <div class="wallet-stat"><span>Resultados 90d</span><b>${compact(wallet.outcomes)}</b></div>
+            <div class="wallet-stat"><span>Acerto observado</span><b>${Number(wallet.win_rate_pct).toFixed(1)}%</b></div>
+            <div class="wallet-stat"><span>Piso estatístico</span><b>${Number(wallet.confidence_win_rate_pct).toFixed(1)}%</b></div>
+            <div class="wallet-stat"><span>Compra / venda</span><b>${compact(wallet.total_buy)} / ${compact(wallet.total_sell)}</b></div>
             <div class="wallet-stat"><span>PnL realizado</span><b class="${wallet.realized_pnl_usd >= 0 ? 'positive' : ''}">${money(wallet.realized_pnl_usd)}</b></div>
+            <div class="wallet-stat"><span>Vista em lançamentos</span><b>${compact(wallet.recent_tokens_seen)}</b></div>
           </div>
         </div>
         <div class="wallet-score"><b>${wallet.score}</b><span>score / 100</span><i class="confidence-pill ${escapeHTML(wallet.confidence)}">${confidenceLabels[wallet.confidence] || wallet.confidence}</i></div>
-        ${risky ? '<div class="wallet-risk-note">Carteira mantida apenas para investigação: tag ligada a dev, insider ou compras coordenadas reduziu o score.</div>' : ''}
+        ${risky ? '<div class="wallet-risk-note">Carteira excluída das oportunidades por risco de vínculo com o lançamento.</div>' : ''}
       </article>`;
     }).join('');
   }
@@ -115,11 +117,13 @@
     return value === true ? 'desabilitada' : value === false ? 'ativa' : 'sem dado';
   }
 
-  function renderTokens(tokens = []) {
+  function renderTokens(tokens = [], birdeyeConfigured = false) {
     const box = document.querySelector('#solanaLaunchList');
     if (!box) return;
     if (!tokens.length) {
-      box.innerHTML = '<div class="intel-empty"><strong>Nenhum lançamento disponível</strong>A Jupiter não respondeu ou a cota atual foi atingida. Tente atualizar em alguns instantes.</div>';
+      box.innerHTML = birdeyeConfigured
+        ? '<div class="intel-empty"><strong>Nenhuma oportunidade passou pelo filtro</strong>Isso é um resultado válido: os lançamentos atuais não combinaram segurança mínima com uma carteira de histórico comprovado. O radar não completa espaço com moedas fracas.</div>'
+        : '<div class="intel-empty"><strong>Filtro aguardando a Birdeye</strong>Sem o histórico das carteiras, nenhum lançamento é promovido a oportunidade.</div>';
       return;
     }
     box.innerHTML = tokens.map(token => {
@@ -130,14 +134,23 @@
       const flagHTML = flags.length
         ? flags.map(flag => `<span class="risk-flag">${escapeHTML(flagLabels[flag] || flag)}</span>`).join('')
         : '<span class="risk-flag clean">sem alerta estrutural nos campos disponíveis</span>';
-      return `<article class="launch-card" data-mint="${escapeHTML(token.mint)}">
+      const reasons = (token.reasons || []).map(reason => `<li>${escapeHTML(reason)}</li>`).join('');
+      const evidence = (token.wallet_evidence || []).map(wallet => `<a class="opportunity-wallet" href="${escapeHTML(wallet.solscan_url)}" target="_blank" rel="noopener noreferrer">
+        <span>${escapeHTML(short(wallet.wallet))}${wallet.early ? ' · EARLY' : ''}</span>
+        <b>${Number(wallet.win_rate_pct).toFixed(1)}% · ${compact(wallet.outcomes)} resultados · ${money(wallet.realized_pnl_usd)}</b>
+      </a>`).join('');
+      const conviction = token.conviction === 'high' ? 'alta convicção' : 'seletiva';
+      return `<article class="launch-card opportunity-card" data-mint="${escapeHTML(token.mint)}">
         <div class="launch-icon">${icon}</div>
         <div>
-          <div class="launch-name-row"><span class="launch-name">${escapeHTML(token.symbol)} · ${escapeHTML(token.name)}</span><span class="launch-age">${age(token.first_pool_at)}</span></div>
+          <div class="launch-name-row"><span class="launch-name">${escapeHTML(token.symbol)} · ${escapeHTML(token.name)}</span><span class="conviction-pill ${escapeHTML(token.conviction)}">${conviction}</span><span class="launch-age">${age(token.first_pool_at)}</span></div>
+          <div class="opportunity-score"><b>${Number(token.opportunity_score)}</b><span>score da oportunidade</span><i>${compact(token.quality_wallet_count)} carteira(s) qualificada(s)</i></div>
           <div class="launch-meta"><span>Liquidez <b>${money(token.liquidity_usd)}</b></span><span>Holders <b>${compact(token.holder_count)}</b></span><span>Organic <b>${Number(token.organic_score || 0).toFixed(0)}</b></span><span>Top holders <b>${token.top_holders_pct == null ? '—' : `${Number(token.top_holders_pct).toFixed(1)}%`}</b></span></div>
           <div class="launch-meta"><span>Mint <b>${boolLabel(token.mint_authority_disabled)}</b></span><span>Freeze <b>${boolLabel(token.freeze_authority_disabled)}</b></span><span>Traders 5m <b>${compact(token.traders_5m)}</b></span></div>
           <div class="safety-track" title="Score estrutural, não previsão de retorno"><i style="width:${Math.max(0, Math.min(100, Number(token.safety_score)))}%"></i></div>
           <div class="launch-flags">${flagHTML}</div>
+          <ul class="opportunity-reasons">${reasons}</ul>
+          <div class="opportunity-wallets">${evidence}</div>
         </div>
         <div class="launch-actions"><button class="route-button" data-route-mint="${escapeHTML(token.mint)}">Validar rotas Jupiter</button><a class="jupiter-link" href="${escapeHTML(token.jupiter_url)}" target="_blank" rel="noopener noreferrer">Abrir na jup.ag ↗</a><span class="route-result" data-route-result="${escapeHTML(token.mint)}">Somente cotação · 0,25 SOL</span></div>
       </article>`;
@@ -150,10 +163,10 @@
     const summary = data.summary || {};
     const values = {
       '#intelRecentTokens': summary.recent_tokens || 0,
-      '#intelEnrichedTokens': summary.enriched_tokens || 0,
-      '#intelWallets': summary.wallet_candidates || 0,
-      '#intelEarlyWallets': summary.early_wallets || 0,
-      '#intelRobustWallets': summary.robust_wallets || 0,
+      '#intelEligibleTokens': summary.structurally_eligible || 0,
+      '#intelOpportunities': summary.opportunities || 0,
+      '#intelQualityWallets': summary.quality_wallets || 0,
+      '#intelRejectedTokens': summary.rejected_tokens || 0,
     };
     Object.entries(values).forEach(([selector, value]) => {
       const element = document.querySelector(selector);
@@ -167,12 +180,12 @@
     setup.innerHTML = !jupiterAvailable
       ? `<span class="solana-error">Jupiter indisponível nesta atualização: ${escapeHTML(errors.find(error => error.provider === 'jupiter')?.message || 'não foi possível consultar os lançamentos agora.')}</span>`
       : !birdeyeConfigured
-        ? 'Jupiter está ativa para lançamentos e rotas. Para habilitar o ranking de carteiras, configure <code>BIRDEYE_API_KEY</code> no backend. Helius permanece opcional para a auditoria ampliada das carteiras.'
+        ? 'Jupiter está ativa para descoberta e rotas. Nenhum token será promovido sem a evidência histórica da carteira; configure <code>BIRDEYE_API_KEY</code> no backend. Helius permanece opcional.'
         : errors.length
           ? `<span class="solana-error">Atualização parcial: ${escapeHTML(errors[0].provider)} · ${escapeHTML(errors[0].message)}</span>`
           : '';
     renderWallets(data.wallets, birdeyeConfigured);
-    renderTokens(data.tokens);
+    renderTokens(data.opportunities, birdeyeConfigured);
     const generated = document.querySelector('#solanaGeneratedAt');
     if (generated) generated.textContent = data.generated_at
       ? `Atualizado ${new Date(data.generated_at * 1000).toLocaleTimeString(locale(), {hour: '2-digit', minute: '2-digit'})}`
