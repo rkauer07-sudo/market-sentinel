@@ -60,7 +60,7 @@
     metadata_unavailable: 'metadados ainda indisponíveis',
   };
   const confidenceLabels = {
-    robust: 'amostra robusta', established: 'amostra validada', insufficient: 'amostra insuficiente',
+    robust: '8+ lucros distintos', established: '5+ lucros distintos', aggressive: 'filtro agressivo',
   };
 
   function providerClass(provider) {
@@ -92,7 +92,7 @@
       return;
     }
     if (!wallets.length) {
-      box.innerHTML = '<div class="intel-empty"><strong>Nenhuma carteira atingiu o padrão de qualidade</strong>O filtro exige histórico de 90 dias, pelo menos 10 resultados, compras e vendas suficientes, acerto mínimo de 55% e PnL realizado positivo.</div>';
+      box.innerHTML = '<div class="intel-empty"><strong>Nenhuma carteira atingiu o corte agressivo</strong>A carteira entra no monitor ao comprovar PnL realizado positivo em pelo menos 3 memecoins diferentes. Lucro não realizado e mints repetidos não contam; dev, insider e bundler ficam de fora.</div>';
       return;
     }
     box.innerHTML = wallets.slice(0, 20).map((wallet, index) => {
@@ -108,10 +108,10 @@
             <div class="wallet-stat"><span>Piso estatístico</span><b>${Number(wallet.confidence_win_rate_pct).toFixed(1)}%</b></div>
             <div class="wallet-stat"><span>Compra / venda</span><b>${compact(wallet.total_buy)} / ${compact(wallet.total_sell)}</b></div>
             <div class="wallet-stat"><span>PnL realizado</span><b class="${wallet.realized_pnl_usd >= 0 ? 'positive' : ''}">${money(wallet.realized_pnl_usd)}</b></div>
-            <div class="wallet-stat"><span>Mints conhecidos</span><b>${compact(wallet.recent_tokens_seen)}</b></div>
+            <div class="wallet-stat"><span>Memecoins com lucro</span><b>${compact(wallet.profitable_memecoins)}</b></div>
           </div>
         </div>
-        <div class="wallet-score"><b>${wallet.score}</b><span>score / 100</span><i class="confidence-pill ${escapeHTML(wallet.confidence)}">${confidenceLabels[wallet.confidence] || wallet.confidence}</i></div>
+        <div class="wallet-score"><b>${wallet.score}</b><span>score de contexto</span><i class="confidence-pill ${escapeHTML(wallet.confidence)}">${confidenceLabels[wallet.confidence] || wallet.confidence}</i></div>
         ${risky ? '<div class="wallet-risk-note">Carteira excluída das oportunidades por risco de vínculo com o lançamento.</div>' : ''}
       </article>`;
     }).join('');
@@ -142,7 +142,7 @@
         <div class="launch-icon">${icon}</div>
         <div>
           <div class="launch-name-row"><span class="launch-name">${escapeHTML(purchase.symbol)} · ${escapeHTML(purchase.name)}</span><span class="conviction-pill high">NOVA POSIÇÃO</span><span class="launch-age">${age(Number(purchase.purchased_at_unix) * 1000)}</span></div>
-          <div class="purchase-wallet-line"><a href="${escapeHTML(purchase.solscan_url)}" target="_blank" rel="noopener noreferrer">Carteira #${Number(purchase.wallet_rank)} · ${escapeHTML(short(purchase.wallet))}</a><b>${money(purchase.wallet_realized_pnl_usd)} realizados · ${Number(purchase.wallet_win_rate_pct).toFixed(1)}% acerto</b></div>
+          <div class="purchase-wallet-line"><a href="${escapeHTML(purchase.solscan_url)}" target="_blank" rel="noopener noreferrer">Carteira #${Number(purchase.wallet_rank)} · ${escapeHTML(short(purchase.wallet))}</a><b>${money(purchase.wallet_realized_pnl_usd)} realizados · ${compact(purchase.wallet_profitable_memecoins)} memecoins lucrativas</b></div>
           <div class="launch-meta"><span>Recebeu <b>${Number(purchase.token_amount || 0).toLocaleString(locale(), {maximumFractionDigits: 4})} ${escapeHTML(purchase.symbol)}</b></span><span>Pagou <b>${payment}</b></span><span>Origem <b>${escapeHTML(purchase.source)}</b></span></div>
           <div class="launch-meta"><span>Liquidez <b>${money(purchase.liquidity_usd)}</b></span><span>Market cap <b>${money(purchase.mcap_usd)}</b></span><span>Holders <b>${compact(purchase.holder_count)}</b></span><span>Safety <b>${Number(purchase.safety_score || 0)}/100</b></span></div>
           <div class="safety-track" title="Score estrutural, não previsão de retorno"><i style="width:${Math.max(0, Math.min(100, Number(purchase.safety_score)))}%"></i></div>

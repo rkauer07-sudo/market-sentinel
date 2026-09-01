@@ -13,6 +13,7 @@ WALLET = "4" * 44
 RISKY_WALLET = "5" * 44
 MINT_A = "6" * 44
 MINT_B = "7" * 44
+MINT_C = "9" * 44
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +54,8 @@ def qualified_wallet(address: str, *, pnl: float, score: int = 80) -> dict:
         "qualified": True,
         "score": score,
         "realized_pnl_usd": pnl,
+        "profitable_memecoins": 3,
+        "profitable_memecoin_mints": [MINT_A, MINT_B, MINT_C],
         "win_rate_pct": 66.7,
         "outcomes": 60,
         "total_buy": 120,
@@ -170,7 +173,7 @@ async def test_launch_history_is_saved_to_supabase_storage(monkeypatch):
 async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities(monkeypatch):
     monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
     monkeypatch.setenv("JUPITER_API_KEY", "jupiter-test")
-    monkeypatch.setenv("SOLANA_INTEL_MAX_TOKENS", "2")
+    monkeypatch.setenv("SOLANA_INTEL_MAX_TOKENS", "3")
     first_pool = 1767225600  # 2026-01-01T00:00:00Z
     api_calls = {"top_traders": 0, "wallet_summary": 0}
 
@@ -180,6 +183,7 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
             return httpx.Response(200, json=[
                 token(MINT_A, "A", "2026-01-01T00:00:00Z"),
                 token(MINT_B, "B", "2026-01-01T00:00:00Z"),
+                token(MINT_C, "C", "2026-01-01T00:00:00Z"),
             ])
         assert request.headers["x-api-key"] == "birdeye-test"
         query = parse_qs(request.url.query.decode())
@@ -209,12 +213,13 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
         api_calls["top_traders"] += 1
         assert query["wallet_tags"] == ["sniper,smart_trader"]
         mint = query["address"][0]
-        pnl = 1200 if mint == MINT_A else 800
+        pnl = {MINT_A: 1200, MINT_B: 800, MINT_C: 600}[mint]
+        delay = {MINT_A: 35, MINT_B: 70, MINT_C: 105}[mint]
         rows = [{
             "owner": WALLET,
             "realizedPnl": pnl,
             "totalPnl": pnl,
-            "firstTradeUnixTime": first_pool + (35 if mint == MINT_A else 70),
+            "firstTradeUnixTime": first_pool + delay,
             "walletTags": ["sniper", "smart_trader"],
             "tradeBuy": 2,
             "tradeSell": 1,
@@ -234,10 +239,10 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
         snapshot = await service.snapshot()
         cached_snapshot = await service.snapshot(force=True)
 
-    assert snapshot["summary"]["enriched_tokens"] == 2
+    assert snapshot["summary"]["enriched_tokens"] == 3
     assert snapshot["summary"]["wallets_evaluated"] == 1
     assert snapshot["summary"]["quality_wallets"] == 1
-    assert snapshot["summary"]["opportunities"] == 2
+    assert snapshot["summary"]["opportunities"] == 3
     assert snapshot["providers"]["birdeye"]["available"] is True
     main = snapshot["wallets"][0]
     assert main["wallet"] == WALLET
@@ -245,19 +250,22 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
     assert main["total_buy"] == 120
     assert main["total_sell"] == 75
     assert main["win_rate_pct"] == 66.7
-    assert main["early_buys"] == 2
-    assert main["median_entry_seconds"] == 52.5
+    assert main["profitable_memecoins"] == 3
+    assert main["early_buys"] == 3
+    assert main["median_entry_seconds"] == 70
     assert main["qualified"] is True
     assert all(row["wallet"] != RISKY_WALLET for row in snapshot["wallets"])
-    assert {row["mint"] for row in snapshot["opportunities"]} == {MINT_A, MINT_B}
+    assert {row["mint"] for row in snapshot["opportunities"]} == {
+        MINT_A, MINT_B, MINT_C,
+    }
     assert all(row["quality_wallet_count"] == 1 for row in snapshot["opportunities"])
     assert all(row["opportunity_score"] >= 72 for row in snapshot["opportunities"])
-    assert cached_snapshot["summary"]["opportunities"] == 2
-    assert api_calls == {"top_traders": 2, "wallet_summary": 1}
+    assert cached_snapshot["summary"]["opportunities"] == 3
+    assert api_calls == {"top_traders": 3, "wallet_summary": 1}
 
 
 @pytest.mark.asyncio
-async def test_weak_wallet_history_does_not_promote_token(monkeypatch):
+async def test_fewer_than_three_profitable_memecoins_do_not_promote_token(monkeypatch):
     monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
     monkeypatch.setenv("SOLANA_INTEL_MAX_TOKENS", "1")
     first_pool = 1767225600
@@ -290,9 +298,48 @@ async def test_weak_wallet_history_does_not_promote_token(monkeypatch):
 
     assert snapshot["summary"]["wallets_evaluated"] == 1
     assert snapshot["summary"]["quality_wallets"] == 0
-    assert snapshot["summary"]["opportunities"] == 0
+    assert snapshot["methodology"]["minimums"]["profitable_memecoins"] == 3
     assert snapshot["opportunities"] == []
     assert snapshot["methodology"]["rejection_reasons"]["no_quality_wallet"] == 1
+
+
+@pytest.mark.asyncio
+async def test_only_distinct_realized_profit_mints_count_for_monitoring():
+    def observation(mint: str, realized: float, *, unrealized: float = 0) -> dict:
+        return {
+            "wallet": WALLET,
+            "mint": mint,
+            "symbol": "MEME",
+            "entry_delay_seconds": 60,
+            "realized_pnl_usd": realized,
+            "unrealized_pnl_usd": unrealized,
+            "total_pnl_usd": realized + unrealized,
+            "tags": ["smart_trader"],
+        }
+
+    async with httpx.AsyncClient() as client:
+        service = SolanaIntelService(client)
+        profile = service._wallet_profile(WALLET, {}, [
+            observation(MINT_A, 100),
+            observation(MINT_A, 200),
+            observation(MINT_B, 0, unrealized=5_000),
+            observation(MINT_C, 300),
+        ])
+
+        assert profile["profitable_memecoins"] == 2
+        assert profile["qualified"] is False
+
+        profile = service._refresh_wallet_profile(profile, [
+            observation(MINT_B, 50),
+        ])
+        assert profile["profitable_memecoins"] == 3
+        assert profile["qualified"] is True
+
+        profile = service._refresh_wallet_profile(profile, [
+            observation(MINT_B, 0, unrealized=5_000),
+        ])
+        assert profile["profitable_memecoins"] == 2
+        assert profile["qualified"] is False
 
 
 @pytest.mark.asyncio

@@ -33,6 +33,8 @@ services:
         value: "12"
       - key: SOLANA_INTEL_MONITOR_WALLETS
         value: "25"
+      - key: SOLANA_INTEL_MIN_PROFITABLE_MEMECOINS
+        value: "3"
       - key: SOLANA_INTEL_CACHE_SECONDS
         value: "300"
       - key: LOG_LEVEL

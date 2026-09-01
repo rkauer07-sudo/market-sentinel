@@ -134,8 +134,10 @@ class SolanaIntelService:
         self.min_token_safety = max(
             0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_TOKEN_SAFETY"), 70))
         )
-        self.min_wallet_score = max(
-            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_WALLET_SCORE"), 60))
+        self.min_profitable_memecoins = max(
+            1, min(20, _integer(
+                os.getenv("SOLANA_INTEL_MIN_PROFITABLE_MEMECOINS"), 3
+            ))
         )
         self.min_opportunity_score = max(
             0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_OPPORTUNITY_SCORE"), 72))
@@ -171,7 +173,7 @@ class SolanaIntelService:
     @staticmethod
     def _empty_history_state() -> dict:
         return {
-            "version": 2,
+            "version": 3,
             "tokens": {},
             "wallets": {},
             "wallet_mints": {},
@@ -224,7 +226,7 @@ class SolanaIntelService:
         purchases = payload.get("purchases")
         helius_webhook = payload.get("helius_webhook")
         return {
-            "version": 2,
+            "version": 3,
             "updated_at": _integer(payload.get("updated_at")),
             "tokens": tokens if isinstance(tokens, dict) else {},
             "wallets": wallets if isinstance(wallets, dict) else {},
@@ -560,23 +562,10 @@ class SolanaIntelService:
             accuracy_points + profit_points + sample_points + exit_points
             + average_points + tag_points - risk_penalty,
         )))
-        qualified = bool(
-            risk_penalty == 0
-            and outcomes >= 10
-            and total_buy >= 10
-            and total_sell >= 5
-            and win_rate >= 0.55
-            and realized > 0
-            and score >= self.min_wallet_score
-        )
-        delays = [
-            item["entry_delay_seconds"] for item in wallet_observations
-            if item["entry_delay_seconds"] is not None
-        ]
-        return {
+        profile = {
             "wallet": wallet,
             "score": score,
-            "qualified": qualified,
+            "qualified": False,
             "history_window": "90d",
             "total_buy": total_buy,
             "total_sell": total_sell,
@@ -590,22 +579,133 @@ class SolanaIntelService:
             "unrealized_pnl_usd": round(unrealized, 2),
             "total_pnl_usd": round(total_pnl, 2),
             "avg_profit_per_trade_usd": round(avg_profit, 2),
-            "recent_tokens_seen": len({item["mint"] for item in wallet_observations}),
-            "early_buys": sum(delay <= 120 for delay in delays),
-            "median_entry_seconds": round(median(delays), 1) if delays else None,
-            "earliest_entry_seconds": min(delays) if delays else None,
+            "recent_tokens_seen": 0,
+            "profitable_memecoins": 0,
+            "profitable_memecoin_mints": [],
+            "early_buys": 0,
+            "median_entry_seconds": None,
+            "earliest_entry_seconds": None,
             "tags": tags,
             "risk_penalty": risk_penalty,
-            "confidence": (
-                "robust" if outcomes >= 30 else "established" if outcomes >= 10
-                else "insufficient"
-            ),
-            "observations": sorted(wallet_observations, key=lambda item: (
-                item["entry_delay_seconds"] is None,
-                item["entry_delay_seconds"] or 10**9,
-            ))[:12],
+            "confidence": "aggressive",
+            "observations": [],
             "solscan_url": f"https://solscan.io/account/{wallet}",
         }
+        return self._refresh_wallet_profile(profile, wallet_observations)
+
+    def _refresh_wallet_profile(
+        self, profile: dict, observations: list[dict]
+    ) -> dict:
+        """Merge distinct profitable mints and reapply the monitoring rule.
+
+        The profitable-mint list is persisted independently of the compact UI
+        observation sample. Current Birdeye evidence replaces older evidence
+        for the same mint, so a PnL that later turns non-positive stops counting.
+        """
+        wallet = str(profile.get("wallet") or "")
+        previous_rows = profile.get("observations")
+        if not isinstance(previous_rows, list):
+            previous_rows = []
+        current_rows = [
+            item for item in observations
+            if isinstance(item, dict) and item.get("wallet") == wallet
+        ]
+
+        evidence_by_mint: dict[str, dict] = {}
+        for item in previous_rows:
+            mint = str(item.get("mint") or "")
+            if BASE58_ADDRESS.fullmatch(mint):
+                evidence_by_mint[mint] = item
+        current_by_mint: dict[str, dict] = {}
+        for item in current_rows:
+            mint = str(item.get("mint") or "")
+            if not BASE58_ADDRESS.fullmatch(mint):
+                continue
+            current = current_by_mint.get(mint)
+            if (
+                current is None
+                or _number(item.get("realized_pnl_usd"))
+                >= _number(current.get("realized_pnl_usd"))
+            ):
+                current_by_mint[mint] = item
+        evidence_by_mint.update(current_by_mint)
+
+        stored_mints = profile.get("profitable_memecoin_mints")
+        profitable_mints: set[str] = set()
+        if isinstance(stored_mints, list):
+            profitable_mints.update(
+                str(mint) for mint in stored_mints
+                if BASE58_ADDRESS.fullmatch(str(mint))
+            )
+        if not profitable_mints:
+            profitable_mints.update(
+                mint for mint, item in evidence_by_mint.items()
+                if _number(item.get("realized_pnl_usd")) > 0
+            )
+        for mint, item in current_by_mint.items():
+            if _number(item.get("realized_pnl_usd")) > 0:
+                profitable_mints.add(mint)
+            else:
+                profitable_mints.discard(mint)
+
+        tags = {
+            str(tag).lower() for tag in profile.get("tags", [])
+            if str(tag).strip()
+        }
+        tags.update(
+            str(tag).lower() for item in current_rows
+            for tag in item.get("tags", []) if str(tag).strip()
+        )
+        risk_penalty = 100 if tags.intersection(
+            {"dev", "insider", "bundler"}
+        ) else 0
+        profitable_count = len(profitable_mints)
+        delays = [
+            _integer(item.get("entry_delay_seconds"))
+            for item in evidence_by_mint.values()
+            if item.get("entry_delay_seconds") is not None
+        ]
+        ordered_observations = sorted(evidence_by_mint.values(), key=lambda item: (
+            item.get("entry_delay_seconds") is None,
+            _integer(item.get("entry_delay_seconds"), 10**9),
+        ))
+        profile.update({
+            "qualified": bool(
+                risk_penalty == 0
+                and profitable_count >= self.min_profitable_memecoins
+            ),
+            "recent_tokens_seen": max(
+                _integer(profile.get("recent_tokens_seen")),
+                len(evidence_by_mint),
+                profitable_count,
+            ),
+            "profitable_memecoins": profitable_count,
+            "profitable_memecoin_mints": sorted(profitable_mints),
+            "early_buys": max(
+                _integer(profile.get("early_buys")),
+                sum(delay <= 120 for delay in delays),
+            ),
+            "median_entry_seconds": (
+                round(median(delays), 1) if delays
+                else profile.get("median_entry_seconds")
+            ),
+            "earliest_entry_seconds": (
+                min(delays) if delays else profile.get("earliest_entry_seconds")
+            ),
+            "tags": sorted(tags),
+            "risk_penalty": risk_penalty,
+            "confidence": (
+                "robust" if profitable_count >= 8
+                else "established" if profitable_count >= 5
+                else "aggressive"
+            ),
+            "qualification_rule": (
+                f">={self.min_profitable_memecoins} memecoins distintas com "
+                "PnL realizado positivo"
+            ),
+            "observations": ordered_observations[:12],
+        })
+        return profile
 
     def _remember_wallet_mints(self, wallet: str, mints: set[str]) -> None:
         if not mints:
@@ -681,8 +781,8 @@ class SolanaIntelService:
             reasons = [
                 f"{len(evidence)} carteira(s) com histórico qualificado",
                 (
-                    f"melhor carteira: {best_wallet['win_rate_pct']:.1f}% de acerto "
-                    f"em {best_wallet['outcomes']} resultados"
+                    f"melhor carteira: {best_wallet['profitable_memecoins']} "
+                    "memecoins distintas com lucro realizado"
                 ),
                 f"PnL realizado 90d: ${best_wallet['realized_pnl_usd']:,.0f}",
             ]
@@ -699,6 +799,7 @@ class SolanaIntelService:
                     "total_buy": wallet["total_buy"],
                     "total_sell": wallet["total_sell"],
                     "realized_pnl_usd": wallet["realized_pnl_usd"],
+                    "profitable_memecoins": wallet["profitable_memecoins"],
                     "entry_delay_seconds": observation["entry_delay_seconds"],
                     "early": bool(
                         (
@@ -826,15 +927,19 @@ class SolanaIntelService:
             -item["liquidity_usd"],
         ))
         wallet_cache = self._history_state.get("wallets", {})
-        wallets = [
-            record["profile"] for record in wallet_cache.values()
-            if isinstance(record, dict)
-            and isinstance(record.get("profile"), dict)
-            and record["profile"].get("qualified")
-        ]
-        # The product promise is explicitly profit-led: once a wallet clears
-        # the quality floor (closed outcomes, buys, sells and win rate), rank
-        # by realized PnL rather than by the opaque composite score.
+        wallets = []
+        for record in wallet_cache.values():
+            if not isinstance(record, dict) or not isinstance(
+                record.get("profile"), dict
+            ):
+                continue
+            profile = self._refresh_wallet_profile(record["profile"], [])
+            record["profile"] = profile
+            if profile.get("qualified"):
+                wallets.append(profile)
+        # Qualification is deliberately aggressive: the configured number of
+        # distinct memecoins with positive realized PnL. The ranking itself is
+        # led by aggregate realized PnL rather than the context score.
         wallets.sort(key=lambda row: (
             -_number(row.get("realized_pnl_usd")),
             -_number(row.get("score")),
@@ -1102,6 +1207,9 @@ class SolanaIntelService:
                         "wallet_rank": profile["rank"],
                         "wallet_score": profile.get("score", 0),
                         "wallet_realized_pnl_usd": profile.get("realized_pnl_usd", 0),
+                        "wallet_profitable_memecoins": profile.get(
+                            "profitable_memecoins", 0
+                        ),
                         "wallet_win_rate_pct": profile.get("win_rate_pct", 0),
                         "wallet_outcomes": profile.get("outcomes", 0),
                         "mint": mint,
@@ -1261,7 +1369,11 @@ class SolanaIntelService:
                         < self.wallet_cache_seconds
                         and isinstance(cached.get("profile"), dict)
                     ):
-                        wallet_profiles.append(cached["profile"])
+                        profile = self._refresh_wallet_profile(
+                            cached["profile"], observations
+                        )
+                        cached["profile"] = profile
+                        wallet_profiles.append(profile)
                     else:
                         wallets_to_audit.append(wallet)
 
@@ -1359,6 +1471,16 @@ class SolanaIntelService:
                     )
 
             opportunities, wallets, rejection_reasons = self._aggregate_history()
+            for profile in wallets:
+                if profile["wallet"] in self._history_state.get("wallet_mints", {}):
+                    continue
+                self._remember_wallet_mints(
+                    profile["wallet"],
+                    set(profile.get("profitable_memecoin_mints", [])).union(
+                        item.get("mint") for item in profile.get("observations", [])
+                        if isinstance(item, dict) and item.get("mint")
+                    ),
+                )
             try:
                 providers["helius"] = await self._sync_helius_webhook(wallets)
             except Exception as exc:
@@ -1440,8 +1562,9 @@ class SolanaIntelService:
                     "reanalyze_seconds": self.reanalyze_seconds,
                     "history_persistent": self.history_persistent,
                     "ranking": (
-                        "PnL realizado decrescente após piso de qualidade: Wilson "
-                        "+ amostra de compras/vendas + disciplina de saída"
+                        "PnL realizado decrescente entre carteiras com pelo menos "
+                        f"{self.min_profitable_memecoins} memecoins distintas e "
+                        "PnL realizado positivo"
                     ),
                     "alert_rule": (
                         "primeira compra observada de um mint por carteira ranqueada; "
@@ -1452,12 +1575,8 @@ class SolanaIntelService:
                     "minimums": {
                         "liquidity_usd": self.min_liquidity_usd,
                         "token_safety": self.min_token_safety,
-                        "wallet_score": self.min_wallet_score,
                         "opportunity_score": self.min_opportunity_score,
-                        "wallet_outcomes": 10,
-                        "wallet_buys": 10,
-                        "wallet_sells": 5,
-                        "wallet_win_rate_pct": 55,
+                        "profitable_memecoins": self.min_profitable_memecoins,
                     },
                     "rejection_reasons": rejection_reasons,
                     "entry_delay_is_approximate": True,

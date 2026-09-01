@@ -71,11 +71,13 @@ read-only independente do radar de futuros:
 
 - Jupiter Tokens V2 fornece a coorte de memecoins recentes usada para descobrir
   traders e enriquece cada mint comprado com nome, liquidez, holders e riscos;
-- Birdeye cruza os top traders `sniper`/`smart_trader` e audita 90 dias de PnL,
-  compras, vendas, resultados encerrados e taxa de acerto;
-- primeiro são aplicados pisos de qualidade (amostra, compra, venda, acerto e
-  PnL positivo); as carteiras aprovadas são então ordenadas pelo **maior lucro
-  realizado**, não pelo score composto;
+- Birdeye cruza os top traders `sniper`/`smart_trader`, o PnL realizado por mint
+  e o resumo de 90 dias de cada carteira;
+- o corte é deliberadamente agressivo: **3 memecoins diferentes com PnL
+  realizado positivo** já colocam a carteira no monitor. Mints repetidos e
+  lucro apenas não realizado não contam;
+- as carteiras aprovadas são ordenadas pelo **maior lucro realizado**, não pelo
+  score composto; compras, vendas e taxa de acerto permanecem como contexto;
 - tags `dev`, `insider` e `bundler` desqualificam uma carteira;
 - as melhores carteiras são sincronizadas com um webhook Enhanced da Helius,
   filtrado para `SWAP` e `BUY` confirmados;
@@ -112,7 +114,7 @@ SOLANA_INTEL_MAX_CONCURRENCY=4
 SOLANA_INTEL_HISTORY_OBJECT=solana-intel-history.json
 SOLANA_INTEL_MIN_LIQUIDITY_USD=25000
 SOLANA_INTEL_MIN_TOKEN_SAFETY=70
-SOLANA_INTEL_MIN_WALLET_SCORE=60
+SOLANA_INTEL_MIN_PROFITABLE_MEMECOINS=3
 SOLANA_INTEL_MIN_OPPORTUNITY_SCORE=72
 SOLANA_INTEL_CACHE_SECONDS=300
 ```

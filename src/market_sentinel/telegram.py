@@ -80,7 +80,7 @@ def format_memecoin_purchase(purchase: dict) -> str:
         f"Carteira #{int(purchase.get('wallet_rank') or 0)}: "
         f"<a href=\"{html.escape(str(purchase.get('solscan_url') or ''))}\">{wallet[:6]}…{wallet[-4:]}</a>\n"
         f"PnL realizado 90d: <b>${float(purchase.get('wallet_realized_pnl_usd') or 0):,.0f}</b> "
-        f"| Acerto: <b>{float(purchase.get('wallet_win_rate_pct') or 0):.1f}%</b>\n\n"
+        f"| Memecoins lucrativas: <b>{int(purchase.get('wallet_profitable_memecoins') or 0)}</b>\n\n"
         f"Quantidade recebida: <code>{float(purchase.get('token_amount') or 0):,.8g}</code>\n"
         f"Pagamento detectado: <b>{payment}</b>\n"
         f"Liquidez atual: <b>${float(purchase.get('liquidity_usd') or 0):,.0f}</b> "
