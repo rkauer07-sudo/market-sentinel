@@ -1023,7 +1023,7 @@ class SolanaIntelService:
                     }
                     if (
                         webhook_id and remote_addresses == addresses
-                        and {"SWAP", "BUY"}.issubset(remote_types)
+                        and "SWAP" in remote_types
                         and match.get("active", True)
                     ):
                         state.update({
@@ -1041,7 +1041,7 @@ class SolanaIntelService:
 
         body = {
             "webhookURL": self.helius_webhook_url,
-            "transactionTypes": ["SWAP", "BUY"],
+            "transactionTypes": ["SWAP"],
             "accountAddresses": addresses,
             "webhookType": "enhanced",
             "authHeader": self.helius_webhook_secret,
@@ -1568,7 +1568,7 @@ class SolanaIntelService:
                     ),
                     "alert_rule": (
                         "primeira compra observada de um mint por carteira ranqueada; "
-                        "SWAP/BUY confirmado pela Helius e deduplicado por assinatura"
+                        "SWAP confirmado pela Helius e deduplicado por assinatura"
                     ),
                     "monitor_wallets": self.monitor_wallets,
                     "disqualifying_tags": ["dev", "insider", "bundler"],

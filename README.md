@@ -80,7 +80,8 @@ read-only independente do radar de futuros:
   score composto; compras, vendas e taxa de acerto permanecem como contexto;
 - tags `dev`, `insider` e `bundler` desqualificam uma carteira;
 - as melhores carteiras são sincronizadas com um webhook Enhanced da Helius,
-  filtrado para `SWAP` e `BUY` confirmados;
+  filtrado para `SWAP` confirmado; a direção da compra é validada pelos tokens
+  recebidos e pelo pagamento que saiu da carteira;
 - um alerta só nasce quando a carteira recebe, em troca de SOL ou outro token,
   um mint fungível ainda não observado para ela. Reforços, vendas, airdrops,
   NFTs e entregas repetidas do webhook não duplicam o alerta;

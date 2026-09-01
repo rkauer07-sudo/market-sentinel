@@ -473,7 +473,7 @@ async def test_helius_webhook_sync_only_updates_when_wallet_set_changes(monkeypa
         if request.method == "GET":
             return httpx.Response(200, json=[])
         body = json.loads(request.content)
-        assert body["transactionTypes"] == ["SWAP", "BUY"]
+        assert body["transactionTypes"] == ["SWAP"]
         assert body["accountAddresses"] == [WALLET]
         assert body["authHeader"] == "webhook-secret"
         return httpx.Response(200, json={"webhookID": "webhook-1"})
