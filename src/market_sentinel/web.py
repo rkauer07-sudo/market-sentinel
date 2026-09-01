@@ -175,6 +175,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     app.state.dashboard = dashboard
     static_dir = Path(__file__).parent / "static"
     static = static_dir / "index.html"
+    memecoins_page = static_dir / "memecoins.html"
     auth_user = os.getenv("DASHBOARD_USER")
     auth_password = os.getenv("DASHBOARD_PASSWORD")
     session_cookie = "sentinel_session"
@@ -241,6 +242,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def index(): return FileResponse(static)
+
+    @app.get("/memecoins-analyser", include_in_schema=False)
+    async def memecoins_analyser(): return FileResponse(memecoins_page)
 
     @app.get("/static/i18n-full.js", include_in_schema=False)
     async def dashboard_i18n():

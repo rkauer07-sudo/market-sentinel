@@ -64,9 +64,10 @@ Abra `http://127.0.0.1:8765`. O painel permite iniciar/parar o loop, executar um
 varredura imediata, atualizar o universo e acompanhar oportunidades e logs. Por
 padrão, a interface escuta somente no computador local.
 
-### Radar Solana: smart wallets e lançamentos
+### Memecoins Analyser
 
-A aba **Smart wallets** é uma camada read-only separada do scanner de futuros:
+A página **Memecoins Analyser** fica em `/memecoins-analyser` e é um módulo
+read-only independente do radar de futuros:
 
 - Jupiter Tokens V2 lista pools recentes e fornece metadados, liquidez, holders,
   Organic Score e autoridades do token;
@@ -88,8 +89,15 @@ SOLANA_INTEL_CACHE_SECONDS=300
 ```
 
 Sem `JUPITER_API_KEY`, o serviço tenta o acesso keyless com limite menor. Sem
-`BIRDEYE_API_KEY`, a aba continua mostrando lançamentos e validação de rotas, mas
+`BIRDEYE_API_KEY`, a página continua mostrando lançamentos e validação de rotas, mas
 explica que o ranking de carteiras ainda não está habilitado.
+
+Para produção na Vercel, abra **Project Settings > Environment Variables**, crie
+`BIRDEYE_API_KEY` (obrigatória para o ranking completo) e, de preferência,
+`JUPITER_API_KEY`. Marque os ambientes Production e Preview e faça um redeploy.
+`HELIUS_API_KEY` pode ficar ausente enquanto a auditoria histórica ampliada não
+for habilitada. Nunca use prefixo `NEXT_PUBLIC_` nessas variáveis: elas devem
+permanecer exclusivamente no backend.
 
 ## Login Web3 e chat
 

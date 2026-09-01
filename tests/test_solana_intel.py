@@ -163,5 +163,14 @@ def test_solana_intel_web_endpoints(tmp_path, monkeypatch):
         assert client.post("/api/solana-intel/refresh").json()["forced"] is True
         route = client.get(f"/api/solana-intel/routes/{MINT_A}?amount_sol=0.5").json()
         assert route == {"mint": MINT_A, "amount_sol": 0.5, "read_only": True}
+        dashboard = client.get("/")
+        assert dashboard.status_code == 200
+        assert 'href="/memecoins-analyser"' in dashboard.text
+        assert 'id="solana-intel"' not in dashboard.text
+        analyser = client.get("/memecoins-analyser")
+        assert analyser.status_code == 200
+        assert "Memecoins Analyser" in analyser.text
+        assert 'id="solana-intel"' in analyser.text
+        assert "Smart wallets" not in analyser.text
         assert client.get("/static/solana-intel.js").status_code == 200
         assert client.get("/static/solana-intel.css").status_code == 200

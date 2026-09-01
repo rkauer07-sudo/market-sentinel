@@ -2,7 +2,30 @@
   let intelState = null;
   let loading = false;
 
-  const locale = () => ({pt: 'pt-BR', en: 'en-US', es: 'es-ES'}[currentLanguage] || 'pt-BR');
+  const locale = () => document.documentElement.lang || 'pt-BR';
+  const escapeHTML = value => String(value ?? '').replace(/[&<>"]/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+  }[character]));
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      cache: 'no-store',
+      headers: {...(options.headers || {}), 'Cache-Control': 'no-cache'},
+    });
+    if (!response.ok) {
+      let message = await response.text();
+      try { message = JSON.parse(message).detail; } catch {}
+      throw new Error(message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+  function toast(message, bad = false) {
+    const element = document.querySelector('#toast');
+    if (!element) return;
+    element.textContent = message;
+    element.className = `toast show${bad ? ' bad' : ''}`;
+    window.setTimeout(() => { element.className = 'toast'; }, 2800);
+  }
   const compact = value => new Intl.NumberFormat(locale(), {
     notation: 'compact', maximumFractionDigits: 1,
   }).format(Number(value || 0));
@@ -154,7 +177,6 @@
     if (generated) generated.textContent = data.generated_at
       ? `Atualizado ${new Date(data.generated_at * 1000).toLocaleTimeString(locale(), {hour: '2-digit', minute: '2-digit'})}`
       : 'Ainda não atualizado';
-    if (typeof setLanguage === 'function') setLanguage(currentLanguage);
   }
 
   async function loadIntel(force = false) {
@@ -168,17 +190,17 @@
     try {
       const data = await api('/api/solana-intel' + (force ? '/refresh' : ''), force ? {method: 'POST'} : {});
       renderIntel(data);
-      if (force) toast('Radar Solana atualizado');
+      if (force) toast('Memecoins Analyser atualizado');
     } catch (error) {
       const setup = document.querySelector('#solanaIntelSetup');
       setup.classList.add('show');
-      setup.innerHTML = `<span class="solana-error">Não foi possível atualizar o radar Solana: ${escapeHTML(error.message)}</span>`;
+      setup.innerHTML = `<span class="solana-error">Não foi possível atualizar o Memecoins Analyser: ${escapeHTML(error.message)}</span>`;
       if (force) toast(error.message, true);
     } finally {
       loading = false;
       if (button) {
         button.disabled = false;
-        button.textContent = 'Atualizar radar Solana';
+        button.textContent = 'Atualizar análise';
       }
     }
   }
