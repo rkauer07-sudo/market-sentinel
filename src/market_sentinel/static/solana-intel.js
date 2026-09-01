@@ -57,6 +57,7 @@
     thin_liquidity: 'liquidez baixa',
     low_organic_activity: 'atividade pouco orgânica',
     low_safety_score: 'segurança abaixo do corte',
+    metadata_unavailable: 'metadados ainda indisponíveis',
   };
   const confidenceLabels = {
     robust: 'amostra robusta', established: 'amostra validada', insufficient: 'amostra insuficiente',
@@ -107,7 +108,7 @@
             <div class="wallet-stat"><span>Piso estatístico</span><b>${Number(wallet.confidence_win_rate_pct).toFixed(1)}%</b></div>
             <div class="wallet-stat"><span>Compra / venda</span><b>${compact(wallet.total_buy)} / ${compact(wallet.total_sell)}</b></div>
             <div class="wallet-stat"><span>PnL realizado</span><b class="${wallet.realized_pnl_usd >= 0 ? 'positive' : ''}">${money(wallet.realized_pnl_usd)}</b></div>
-            <div class="wallet-stat"><span>Vista em lançamentos</span><b>${compact(wallet.recent_tokens_seen)}</b></div>
+            <div class="wallet-stat"><span>Mints conhecidos</span><b>${compact(wallet.recent_tokens_seen)}</b></div>
           </div>
         </div>
         <div class="wallet-score"><b>${wallet.score}</b><span>score / 100</span><i class="confidence-pill ${escapeHTML(wallet.confidence)}">${confidenceLabels[wallet.confidence] || wallet.confidence}</i></div>
@@ -116,46 +117,38 @@
     }).join('');
   }
 
-  function boolLabel(value) {
-    return value === true ? 'desabilitada' : value === false ? 'ativa' : 'sem dado';
-  }
-
-  function renderTokens(tokens = [], birdeyeConfigured = false) {
+  function renderPurchases(purchases = [], heliusConfigured = false) {
     const box = document.querySelector('#solanaLaunchList');
     if (!box) return;
-    if (!tokens.length) {
-      box.innerHTML = birdeyeConfigured
-        ? '<div class="intel-empty"><strong>Nenhuma oportunidade passou pelo filtro</strong>Isso é um resultado válido: os lançamentos atuais não combinaram segurança mínima com uma carteira de histórico comprovado. O radar não completa espaço com moedas fracas.</div>'
-        : '<div class="intel-empty"><strong>Filtro aguardando a Birdeye</strong>Sem o histórico das carteiras, nenhum lançamento é promovido a oportunidade.</div>';
+    if (!purchases.length) {
+      box.innerHTML = heliusConfigured
+        ? '<div class="intel-empty"><strong>Monitor ativo; nenhuma compra nova detectada</strong>Reforços em posições já conhecidas, vendas e transferências não geram alerta. A próxima abertura em um mint novo aparecerá aqui.</div>'
+        : '<div class="intel-empty"><strong>Monitor aguardando a Helius</strong>Configure o webhook autenticado para receber swaps confirmados das carteiras ranqueadas.</div>';
       return;
     }
-    box.innerHTML = tokens.map(token => {
-      const flags = token.risk_flags || [];
-      const icon = token.icon
-        ? `<img src="${escapeHTML(token.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-        : escapeHTML((token.symbol || '?').slice(0, 2));
+    box.innerHTML = purchases.map(purchase => {
+      const flags = purchase.risk_flags || [];
+      const icon = purchase.icon
+        ? `<img src="${escapeHTML(purchase.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+        : escapeHTML((purchase.symbol || '?').slice(0, 2));
       const flagHTML = flags.length
         ? flags.map(flag => `<span class="risk-flag">${escapeHTML(flagLabels[flag] || flag)}</span>`).join('')
         : '<span class="risk-flag clean">sem alerta estrutural nos campos disponíveis</span>';
-      const reasons = (token.reasons || []).map(reason => `<li>${escapeHTML(reason)}</li>`).join('');
-      const evidence = (token.wallet_evidence || []).map(wallet => `<a class="opportunity-wallet" href="${escapeHTML(wallet.solscan_url)}" target="_blank" rel="noopener noreferrer">
-        <span>${escapeHTML(short(wallet.wallet))}${wallet.early ? ' · EARLY' : ''}</span>
-        <b>${Number(wallet.win_rate_pct).toFixed(1)}% · ${compact(wallet.outcomes)} resultados · ${money(wallet.realized_pnl_usd)}</b>
-      </a>`).join('');
-      const conviction = token.conviction === 'high' ? 'alta convicção' : 'seletiva';
-      return `<article class="launch-card opportunity-card" data-mint="${escapeHTML(token.mint)}">
+      const payment = purchase.payment_amount == null
+        ? 'valor não identificado'
+        : `${Number(purchase.payment_amount).toLocaleString(locale(), {maximumFractionDigits: 6})} ${escapeHTML(purchase.payment_symbol || '')}`;
+      const alertState = purchase.alert_sent_at ? 'Telegram enviado' : purchase.alert_error ? 'Telegram pendente' : 'aguardando entrega';
+      return `<article class="launch-card opportunity-card purchase-card" data-mint="${escapeHTML(purchase.mint)}">
         <div class="launch-icon">${icon}</div>
         <div>
-          <div class="launch-name-row"><span class="launch-name">${escapeHTML(token.symbol)} · ${escapeHTML(token.name)}</span><span class="conviction-pill ${escapeHTML(token.conviction)}">${conviction}</span><span class="launch-age">${age(token.first_pool_at)}</span></div>
-          <div class="opportunity-score"><b>${Number(token.opportunity_score)}</b><span>score da oportunidade</span><i>${compact(token.quality_wallet_count)} carteira(s) qualificada(s)</i></div>
-          <div class="launch-meta"><span>Liquidez <b>${money(token.liquidity_usd)}</b></span><span>Holders <b>${compact(token.holder_count)}</b></span><span>Organic <b>${Number(token.organic_score || 0).toFixed(0)}</b></span><span>Top holders <b>${token.top_holders_pct == null ? '—' : `${Number(token.top_holders_pct).toFixed(1)}%`}</b></span></div>
-          <div class="launch-meta"><span>Mint <b>${boolLabel(token.mint_authority_disabled)}</b></span><span>Freeze <b>${boolLabel(token.freeze_authority_disabled)}</b></span><span>Traders 5m <b>${compact(token.traders_5m)}</b></span></div>
-          <div class="safety-track" title="Score estrutural, não previsão de retorno"><i style="width:${Math.max(0, Math.min(100, Number(token.safety_score)))}%"></i></div>
+          <div class="launch-name-row"><span class="launch-name">${escapeHTML(purchase.symbol)} · ${escapeHTML(purchase.name)}</span><span class="conviction-pill high">NOVA POSIÇÃO</span><span class="launch-age">${age(Number(purchase.purchased_at_unix) * 1000)}</span></div>
+          <div class="purchase-wallet-line"><a href="${escapeHTML(purchase.solscan_url)}" target="_blank" rel="noopener noreferrer">Carteira #${Number(purchase.wallet_rank)} · ${escapeHTML(short(purchase.wallet))}</a><b>${money(purchase.wallet_realized_pnl_usd)} realizados · ${Number(purchase.wallet_win_rate_pct).toFixed(1)}% acerto</b></div>
+          <div class="launch-meta"><span>Recebeu <b>${Number(purchase.token_amount || 0).toLocaleString(locale(), {maximumFractionDigits: 4})} ${escapeHTML(purchase.symbol)}</b></span><span>Pagou <b>${payment}</b></span><span>Origem <b>${escapeHTML(purchase.source)}</b></span></div>
+          <div class="launch-meta"><span>Liquidez <b>${money(purchase.liquidity_usd)}</b></span><span>Market cap <b>${money(purchase.mcap_usd)}</b></span><span>Holders <b>${compact(purchase.holder_count)}</b></span><span>Safety <b>${Number(purchase.safety_score || 0)}/100</b></span></div>
+          <div class="safety-track" title="Score estrutural, não previsão de retorno"><i style="width:${Math.max(0, Math.min(100, Number(purchase.safety_score)))}%"></i></div>
           <div class="launch-flags">${flagHTML}</div>
-          <ul class="opportunity-reasons">${reasons}</ul>
-          <div class="opportunity-wallets">${evidence}</div>
         </div>
-        <div class="launch-actions"><button class="route-button" data-route-mint="${escapeHTML(token.mint)}">Validar rotas Jupiter</button><a class="jupiter-link" href="${escapeHTML(token.jupiter_url)}" target="_blank" rel="noopener noreferrer">Abrir na jup.ag ↗</a><span class="route-result" data-route-result="${escapeHTML(token.mint)}">Somente cotação · 0,25 SOL</span></div>
+        <div class="launch-actions"><button class="route-button" data-route-mint="${escapeHTML(purchase.mint)}">Validar rotas Jupiter</button><a class="jupiter-link" href="${escapeHTML(purchase.transaction_url)}" target="_blank" rel="noopener noreferrer">Ver transação ↗</a><a class="jupiter-link" href="${escapeHTML(purchase.jupiter_url)}" target="_blank" rel="noopener noreferrer">Abrir na jup.ag ↗</a><span class="route-result" data-route-result="${escapeHTML(purchase.mint)}">${escapeHTML(alertState)}</span></div>
       </article>`;
     }).join('');
   }
@@ -165,36 +158,39 @@
     renderProviders(data.providers);
     const summary = data.summary || {};
     const values = {
-      '#intelRecentTokens': summary.launches_in_window || 0,
-      '#intelEligibleTokens': summary.analyzed_tokens || 0,
-      '#intelOpportunities': summary.opportunities || 0,
-      '#intelQualityWallets': summary.quality_wallets || 0,
-      '#intelRejectedTokens': summary.pending_tokens || 0,
+      '#intelRecentTokens': compact(summary.quality_wallets || 0),
+      '#intelEligibleTokens': compact(summary.monitored_wallets || 0),
+      '#intelOpportunities': compact(summary.purchase_alerts_24h || 0),
+      '#intelQualityWallets': money(summary.realized_pnl_usd || 0),
+      '#intelRejectedTokens': compact(summary.pending_alert_delivery || 0),
     };
     Object.entries(values).forEach(([selector, value]) => {
       const element = document.querySelector(selector);
-      if (element) element.textContent = compact(value);
+      if (element) element.textContent = value;
     });
     const setup = document.querySelector('#solanaIntelSetup');
     const birdeyeConfigured = Boolean(data.providers?.birdeye?.configured);
+    const heliusConfigured = Boolean(data.providers?.helius?.configured);
     const historyPersistent = Boolean(data.providers?.history?.persistent);
     const jupiterAvailable = data.providers?.jupiter?.available === true;
     const errors = data.errors || [];
-    setup.classList.toggle('show', !jupiterAvailable || !birdeyeConfigured || !historyPersistent || errors.length > 0);
+    setup.classList.toggle('show', !jupiterAvailable || !birdeyeConfigured || !heliusConfigured || !historyPersistent || errors.length > 0);
     setup.innerHTML = !jupiterAvailable
       ? `<span class="solana-error">Jupiter indisponível nesta atualização: ${escapeHTML(errors.find(error => error.provider === 'jupiter')?.message || 'não foi possível consultar os lançamentos agora.')}</span>`
       : !birdeyeConfigured
-        ? 'Jupiter está ativa para descoberta e rotas. Nenhum token será promovido sem a evidência histórica da carteira; configure <code>BIRDEYE_API_KEY</code> no backend. Helius permanece opcional.'
-        : !historyPersistent
+        ? 'Configure <code>BIRDEYE_API_KEY</code> para descobrir e ranquear as carteiras pelo histórico de PnL realizado.'
+        : !heliusConfigured
+          ? 'O ranking pode ser calculado, mas o alerta em tempo real exige <code>HELIUS_API_KEY</code>, <code>HELIUS_WEBHOOK_URL</code> e <code>HELIUS_WEBHOOK_SECRET</code> no backend.'
+          : !historyPersistent
           ? 'A coleta ampliada está usando memória temporária. Para preservar a janela de centenas de lançamentos entre reinicializações, configure <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code> e o bucket indicado por <code>SUPABASE_STORAGE_BUCKET</code>.'
         : errors.length
           ? `<span class="solana-error">Atualização parcial: ${escapeHTML(errors[0].provider)} · ${escapeHTML(errors[0].message)}</span>`
           : '';
     renderWallets(data.wallets, birdeyeConfigured);
-    renderTokens(data.opportunities, birdeyeConfigured);
+    renderPurchases(data.purchases, heliusConfigured);
     const generated = document.querySelector('#solanaGeneratedAt');
     if (generated) generated.textContent = data.generated_at
-      ? `Atualizado ${new Date(data.generated_at * 1000).toLocaleTimeString(locale(), {hour: '2-digit', minute: '2-digit'})} · ${compact(summary.analyzed_this_cycle)} neste ciclo · janela ${compact(summary.launches_in_window)}/${compact(summary.history_capacity)}`
+      ? `Atualizado ${new Date(data.generated_at * 1000).toLocaleTimeString(locale(), {hour: '2-digit', minute: '2-digit'})} · ${compact(summary.quality_wallets)} carteiras ranqueadas · ${compact(summary.purchase_alerts)} compras novas registradas`
       : 'Ainda não atualizado';
   }
 

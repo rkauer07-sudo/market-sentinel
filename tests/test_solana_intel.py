@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from market_sentinel.solana_intel import SolanaIntelService, WSOL_MINT
+from market_sentinel.solana_intel import SolanaIntelService, USDC_MINT, WSOL_MINT
 from market_sentinel.web import create_app
 
 
@@ -44,6 +44,20 @@ def token(mint: str, symbol: str, created_at: str) -> dict:
             "topHoldersPercentage": 12.5,
         },
         "stats5m": {"numBuys": 31, "numSells": 12, "numTraders": 25},
+    }
+
+
+def qualified_wallet(address: str, *, pnl: float, score: int = 80) -> dict:
+    return {
+        "wallet": address,
+        "qualified": True,
+        "score": score,
+        "realized_pnl_usd": pnl,
+        "win_rate_pct": 66.7,
+        "outcomes": 60,
+        "total_buy": 120,
+        "total_sell": 75,
+        "solscan_url": f"https://solscan.io/account/{address}",
     }
 
 
@@ -312,12 +326,129 @@ async def test_route_validation_is_quote_only(monkeypatch):
     assert WSOL_MINT != MINT_A
 
 
+@pytest.mark.asyncio
+async def test_wallet_ranking_is_led_by_realized_profit():
+    lower_profit = "3" * 44
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(500)
+    )) as client:
+        service = SolanaIntelService(client)
+        service._history_loaded = True
+        service._history_state = service._empty_history_state()
+        service._history_state["wallets"] = {
+            WALLET: {"audited_at": 1, "profile": qualified_wallet(
+                WALLET, pnl=50_000, score=70
+            )},
+            lower_profit: {"audited_at": 1, "profile": qualified_wallet(
+                lower_profit, pnl=10_000, score=95
+            )},
+        }
+
+        _, wallets, _ = service._aggregate_history()
+
+    assert [wallet["wallet"] for wallet in wallets] == [WALLET, lower_profit]
+    assert wallets[0]["score"] < wallets[1]["score"]
+
+
+@pytest.mark.asyncio
+async def test_helius_swap_creates_one_alert_for_first_wallet_buy(monkeypatch):
+    monkeypatch.setenv("HELIUS_WEBHOOK_SECRET", "webhook-secret")
+    sent = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(500)
+    )) as client:
+        service = SolanaIntelService(client)
+        service._history_loaded = True
+        service._history_state = service._empty_history_state()
+        service._history_state["wallets"] = {
+            WALLET: {"audited_at": 1, "profile": qualified_wallet(WALLET, pnl=42_000)},
+        }
+        service._history_state["tokens"] = {
+            MINT_B: {"token": service._normalize_token(
+                token(MINT_B, "FRESH", "2026-01-01T00:00:00Z")
+            )},
+        }
+        service._history_state["wallet_mints"] = {WALLET: [MINT_A]}
+        event = {
+            "type": "SWAP",
+            "source": "JUPITER",
+            "signature": "sig-first-buy",
+            "timestamp": 1_767_225_700,
+            "feePayer": WALLET,
+            "tokenTransfers": [
+                {
+                    "fromUserAccount": WALLET,
+                    "toUserAccount": "8" * 44,
+                    "mint": USDC_MINT,
+                    "tokenAmount": 250,
+                },
+                {
+                    "fromUserAccount": "8" * 44,
+                    "toUserAccount": WALLET,
+                    "mint": MINT_B,
+                    "tokenAmount": 1_250_000,
+                    "tokenStandard": "Fungible",
+                },
+            ],
+            "nativeTransfers": [],
+        }
+
+        async def capture(purchase):
+            sent.append(purchase)
+
+        created = await service.process_helius_webhook(event, send_alert=capture)
+        duplicate = await service.process_helius_webhook(event, send_alert=capture)
+
+    assert service.webhook_authorized("Bearer webhook-secret") is True
+    assert len(created) == 1
+    assert duplicate == []
+    assert len(sent) == 1
+    assert created[0]["wallet_rank"] == 1
+    assert created[0]["mint"] == MINT_B
+    assert created[0]["payment_symbol"] == "USDC"
+    assert created[0]["payment_amount"] == 250
+    assert created[0]["first_wallet_buy"] is True
+    assert service._purchase_rows()[0]["alert_sent_at"] > 0
+
+
+@pytest.mark.asyncio
+async def test_helius_webhook_sync_only_updates_when_wallet_set_changes(monkeypatch):
+    monkeypatch.setenv("HELIUS_API_KEY", "helius-test")
+    monkeypatch.setenv(
+        "HELIUS_WEBHOOK_URL", "https://sentinel.test/api/solana-intel/helius"
+    )
+    monkeypatch.setenv("HELIUS_WEBHOOK_SECRET", "webhook-secret")
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append((request.method, request.url.path))
+        assert request.url.params["api-key"] == "helius-test"
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        body = json.loads(request.content)
+        assert body["transactionTypes"] == ["SWAP", "BUY"]
+        assert body["accountAddresses"] == [WALLET]
+        assert body["authHeader"] == "webhook-secret"
+        return httpx.Response(200, json={"webhookID": "webhook-1"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = SolanaIntelService(client)
+        wallets = [qualified_wallet(WALLET, pnl=42_000)]
+        first = await service._sync_helius_webhook(wallets)
+        second = await service._sync_helius_webhook(wallets)
+
+    assert first["wallets_monitored"] == 1
+    assert second["available"] is True
+    assert calls == [("GET", "/v0/webhooks"), ("POST", "/v0/webhooks")]
+
+
 def test_solana_intel_web_endpoints(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "solana-web.db"))
     monkeypatch.setenv("SESSION_SECRET", "integration-test-secret")
     monkeypatch.delenv("DASHBOARD_USER", raising=False)
     monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
     app = create_app("config.yaml")
+    received_webhooks = []
 
     class FakeIntel:
         async def snapshot(self, *, force=False):
@@ -325,6 +456,13 @@ def test_solana_intel_web_endpoints(tmp_path, monkeypatch):
 
         async def routes(self, mint, *, amount_sol):
             return {"mint": mint, "amount_sol": amount_sol, "read_only": True}
+
+        def webhook_authorized(self, supplied):
+            return supplied == "hook-secret"
+
+        async def process_helius_webhook(self, payload, *, send_alert=None):
+            received_webhooks.extend(payload)
+            return []
 
     app.state.dashboard.solana_intel = FakeIntel()
     with TestClient(app) as client:
@@ -341,5 +479,15 @@ def test_solana_intel_web_endpoints(tmp_path, monkeypatch):
         assert "Memecoins Analyser" in analyser.text
         assert 'id="solana-intel"' in analyser.text
         assert "Smart wallets" not in analyser.text
+        assert client.post(
+            "/api/solana-intel/helius", json=[{"type": "SWAP"}]
+        ).status_code == 401
+        accepted = client.post(
+            "/api/solana-intel/helius",
+            headers={"Authorization": "hook-secret"},
+            json=[{"type": "SWAP"}],
+        )
+        assert accepted.json() == {"accepted": 1}
+        assert received_webhooks == [{"type": "SWAP"}]
         assert client.get("/static/solana-intel.js").status_code == 200
         assert client.get("/static/solana-intel.css").status_code == 200

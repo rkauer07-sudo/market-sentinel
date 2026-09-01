@@ -25,6 +25,13 @@ class TelegramNotifier:
             "text": format_resolution(signal)})
         response.raise_for_status()
 
+    async def send_memecoin_purchase(self, purchase: dict):
+        if not self.configured: return
+        response = await self.client.post(f"https://api.telegram.org/bot{self.token}/sendMessage", json={
+            "chat_id": self.chat_id, "parse_mode": "HTML", "disable_web_page_preview": True,
+            "text": format_memecoin_purchase(purchase)})
+        response.raise_for_status()
+
 
 def format_alert(op: Opportunity) -> str:
     icon = "🟢" if op.direction == "LONG" else "🔴"
@@ -53,3 +60,34 @@ def format_resolution(signal: dict) -> str:
         f"Motivo: {html.escape(signal['resolution_reason'])}\n\n"
         f"Movimento favorável máximo: {signal['max_favorable_pct']:.2f}%\n"
         f"Movimento adverso máximo: {signal['max_adverse_pct']:.2f}%")
+
+
+def format_memecoin_purchase(purchase: dict) -> str:
+    symbol = html.escape(str(purchase.get("symbol") or "?"))
+    name = html.escape(str(purchase.get("name") or "Token novo"))
+    wallet = html.escape(str(purchase.get("wallet") or ""))
+    mint = html.escape(str(purchase.get("mint") or ""))
+    payment_amount = purchase.get("payment_amount")
+    payment = (
+        f"{float(payment_amount):,.6g} {html.escape(str(purchase.get('payment_symbol') or ''))}"
+        if payment_amount is not None else "valor não identificado"
+    )
+    risks = purchase.get("risk_flags") or []
+    risk_text = ", ".join(html.escape(str(risk)) for risk in risks) or "nenhum nos dados disponíveis"
+    return (
+        "🚨 <b>NOVA COMPRA · SMART WALLET</b>\n\n"
+        f"<b>{symbol} · {name}</b>\n"
+        f"Carteira #{int(purchase.get('wallet_rank') or 0)}: "
+        f"<a href=\"{html.escape(str(purchase.get('solscan_url') or ''))}\">{wallet[:6]}…{wallet[-4:]}</a>\n"
+        f"PnL realizado 90d: <b>${float(purchase.get('wallet_realized_pnl_usd') or 0):,.0f}</b> "
+        f"| Acerto: <b>{float(purchase.get('wallet_win_rate_pct') or 0):.1f}%</b>\n\n"
+        f"Quantidade recebida: <code>{float(purchase.get('token_amount') or 0):,.8g}</code>\n"
+        f"Pagamento detectado: <b>{payment}</b>\n"
+        f"Liquidez atual: <b>${float(purchase.get('liquidity_usd') or 0):,.0f}</b> "
+        f"| Safety: <b>{int(purchase.get('safety_score') or 0)}/100</b>\n"
+        f"Riscos: {risk_text}\n\n"
+        f"Mint: <code>{mint}</code>\n"
+        f"<a href=\"{html.escape(str(purchase.get('transaction_url') or ''))}\">Ver transação</a> · "
+        f"<a href=\"{html.escape(str(purchase.get('jupiter_url') or ''))}\">Abrir na Jupiter</a>\n\n"
+        "⚠️ Detecção on-chain informativa; não é ordem nem recomendação financeira."
+    )

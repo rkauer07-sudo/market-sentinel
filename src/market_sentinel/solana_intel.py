@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import math
 import os
@@ -16,6 +17,9 @@ import httpx
 
 
 WSOL_MINT = "So11111111111111111111111111111111111111112"
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD9iiFxQsB4GHtQyMB55Gm"
+PAYMENT_MINTS = {WSOL_MINT, USDC_MINT, USDT_MINT}
 BASE58_ADDRESS = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 
 
@@ -95,6 +99,12 @@ class SolanaIntelService:
         self.birdeye_base = os.getenv(
             "BIRDEYE_API_BASE", "https://public-api.birdeye.so"
         ).rstrip("/")
+        self.helius_base = os.getenv(
+            "HELIUS_API_BASE", "https://api-mainnet.helius-rpc.com"
+        ).rstrip("/")
+        self.helius_webhook_url = os.getenv("HELIUS_WEBHOOK_URL", "").strip()
+        self.helius_webhook_secret = os.getenv("HELIUS_WEBHOOK_SECRET", "").strip()
+        self.helius_webhook_id = os.getenv("HELIUS_WEBHOOK_ID", "").strip()
         self.max_tokens = max(1, min(30, _integer(os.getenv("SOLANA_INTEL_MAX_TOKENS"), 30)))
         self.max_wallets = max(
             1, min(100, _integer(os.getenv("SOLANA_INTEL_MAX_WALLETS"), 50))
@@ -133,6 +143,14 @@ class SolanaIntelService:
         self.cache_seconds = max(
             30, min(3600, _integer(os.getenv("SOLANA_INTEL_CACHE_SECONDS"), 300))
         )
+        self.monitor_wallets = max(
+            1, min(100, _integer(os.getenv("SOLANA_INTEL_MONITOR_WALLETS"), 25))
+        )
+        self.purchase_history_limit = max(
+            20, min(2_000, _integer(
+                os.getenv("SOLANA_INTEL_PURCHASE_HISTORY_LIMIT"), 200
+            ))
+        )
         self.supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         self.history_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "sentinel").strip()
@@ -141,7 +159,7 @@ class SolanaIntelService:
         ).strip()
         history_path = os.getenv("SOLANA_INTEL_HISTORY_PATH", "").strip()
         self.history_path = Path(history_path) if history_path else None
-        self._history_state: dict = {"version": 1, "tokens": {}, "wallets": {}}
+        self._history_state: dict = self._empty_history_state()
         self._history_loaded = False
         self._cache: dict | None = None
         self._cache_at = 0.0
@@ -150,6 +168,17 @@ class SolanaIntelService:
     def _jupiter_headers(self) -> dict[str, str]:
         return {"x-api-key": self.jupiter_api_key} if self.jupiter_api_key else {}
 
+    @staticmethod
+    def _empty_history_state() -> dict:
+        return {
+            "version": 2,
+            "tokens": {},
+            "wallets": {},
+            "wallet_mints": {},
+            "purchases": {},
+            "helius_webhook": {},
+        }
+
     @property
     def configured(self) -> dict[str, bool]:
         return {
@@ -157,6 +186,14 @@ class SolanaIntelService:
             "birdeye": bool(self.birdeye_api_key),
             "helius": bool(self.helius_api_key),
         }
+
+    @property
+    def webhook_configured(self) -> bool:
+        return bool(
+            self.helius_api_key
+            and self.helius_webhook_url
+            and self.helius_webhook_secret
+        )
 
     @property
     def history_persistent(self) -> bool:
@@ -180,14 +217,22 @@ class SolanaIntelService:
     @staticmethod
     def _valid_history_state(payload: Any) -> dict:
         if not isinstance(payload, dict):
-            return {"version": 1, "tokens": {}, "wallets": {}}
+            return SolanaIntelService._empty_history_state()
         tokens = payload.get("tokens")
         wallets = payload.get("wallets")
+        wallet_mints = payload.get("wallet_mints")
+        purchases = payload.get("purchases")
+        helius_webhook = payload.get("helius_webhook")
         return {
-            "version": 1,
+            "version": 2,
             "updated_at": _integer(payload.get("updated_at")),
             "tokens": tokens if isinstance(tokens, dict) else {},
             "wallets": wallets if isinstance(wallets, dict) else {},
+            "wallet_mints": wallet_mints if isinstance(wallet_mints, dict) else {},
+            "purchases": purchases if isinstance(purchases, dict) else {},
+            "helius_webhook": (
+                helius_webhook if isinstance(helius_webhook, dict) else {}
+            ),
         }
 
     async def _load_history(self) -> str | None:
@@ -219,7 +264,7 @@ class SolanaIntelService:
                     json.loads(self.history_path.read_text(encoding="utf-8"))
                 )
         except Exception as exc:
-            self._history_state = {"version": 1, "tokens": {}, "wallets": {}}
+            self._history_state = self._empty_history_state()
             return f"{type(exc).__name__}: {exc}"
         return None
 
@@ -562,6 +607,15 @@ class SolanaIntelService:
             "solscan_url": f"https://solscan.io/account/{wallet}",
         }
 
+    def _remember_wallet_mints(self, wallet: str, mints: set[str]) -> None:
+        if not mints:
+            return
+        records = self._history_state.setdefault("wallet_mints", {})
+        current = records.get(wallet, [])
+        seen = {str(mint) for mint in current if BASE58_ADDRESS.fullmatch(str(mint))}
+        seen.update(mint for mint in mints if BASE58_ADDRESS.fullmatch(mint))
+        records[wallet] = sorted(seen)[-2_000:]
+
     def _build_opportunities(
         self, tokens: list[dict], observations: list[dict], wallets: list[dict]
     ) -> tuple[list[dict], dict[str, int], dict[str, list[str]]]:
@@ -753,7 +807,6 @@ class SolanaIntelService:
 
     def _aggregate_history(self) -> tuple[list[dict], list[dict], dict[str, int]]:
         opportunities = []
-        wallets_by_address: dict[str, dict] = {}
         rejection_reasons: dict[str, int] = defaultdict(int)
         records = self._history_state.get("tokens", {})
         for record in records.values():
@@ -765,12 +818,6 @@ class SolanaIntelService:
             analysis = record.get("analysis")
             if isinstance(analysis, dict) and not self._structural_rejections(token):
                 opportunities.append({**token, **analysis})
-                for wallet in record.get("wallets", []):
-                    if not isinstance(wallet, dict) or not wallet.get("qualified"):
-                        continue
-                    current = wallets_by_address.get(wallet["wallet"])
-                    if current is None or wallet["score"] > current["score"]:
-                        wallets_by_address[wallet["wallet"]] = wallet
             elif _integer(record.get("analyzed_at")):
                 for reason in record.get("rejection_reasons", []):
                     rejection_reasons[str(reason)] += 1
@@ -778,11 +825,355 @@ class SolanaIntelService:
             -item["opportunity_score"], -item["quality_wallet_count"],
             -item["liquidity_usd"],
         ))
-        wallets = sorted(
-            wallets_by_address.values(),
-            key=lambda row: (-row["score"], -row["outcomes"], row["wallet"]),
-        )
+        wallet_cache = self._history_state.get("wallets", {})
+        wallets = [
+            record["profile"] for record in wallet_cache.values()
+            if isinstance(record, dict)
+            and isinstance(record.get("profile"), dict)
+            and record["profile"].get("qualified")
+        ]
+        # The product promise is explicitly profit-led: once a wallet clears
+        # the quality floor (closed outcomes, buys, sells and win rate), rank
+        # by realized PnL rather than by the opaque composite score.
+        wallets.sort(key=lambda row: (
+            -_number(row.get("realized_pnl_usd")),
+            -_number(row.get("score")),
+            -_integer(row.get("outcomes")),
+            row.get("wallet", ""),
+        ))
         return opportunities, wallets, dict(sorted(rejection_reasons.items()))
+
+    def _purchase_rows(self) -> list[dict]:
+        purchases = self._history_state.get("purchases", {})
+        rows = [row for row in purchases.values() if isinstance(row, dict)]
+        rows.sort(key=lambda row: (
+            -_integer(row.get("purchased_at_unix")), row.get("event_id", "")
+        ))
+        return rows[: self.purchase_history_limit]
+
+    def webhook_authorized(self, supplied: str | None) -> bool:
+        if not self.helius_webhook_secret or not supplied:
+            return False
+        candidates = {supplied.strip()}
+        if supplied.lower().startswith("bearer "):
+            candidates.add(supplied[7:].strip())
+        return any(
+            hmac.compare_digest(candidate, self.helius_webhook_secret)
+            for candidate in candidates
+        )
+
+    async def _sync_helius_webhook(self, wallets: list[dict]) -> dict:
+        addresses = sorted([
+            wallet["wallet"] for wallet in wallets[: self.monitor_wallets]
+            if BASE58_ADDRESS.fullmatch(str(wallet.get("wallet", "")))
+        ])
+        if not self.webhook_configured:
+            return {
+                "configured": False,
+                "available": None,
+                "mode": "webhook-not-configured",
+                "wallets_monitored": 0,
+            }
+        if not addresses:
+            return {
+                "configured": True,
+                "available": True,
+                "mode": "webhook-awaiting-ranked-wallets",
+                "wallets_monitored": 0,
+            }
+
+        state = self._history_state.setdefault("helius_webhook", {})
+        stored_addresses = state.get("account_addresses", [])
+        webhook_id = self.helius_webhook_id or str(state.get("webhook_id") or "")
+        if addresses == stored_addresses and webhook_id:
+            return {
+                "configured": True,
+                "available": True,
+                "mode": "enhanced-webhook",
+                "wallets_monitored": len(addresses),
+            }
+
+        params = {"api-key": self.helius_api_key}
+        if not webhook_id:
+            response = await self.client.get(
+                f"{self.helius_base}/v0/webhooks", params=params
+            )
+            if response.status_code >= 400:
+                raise UpstreamError(
+                    f"Helius webhooks respondeu {response.status_code}: {response.text[:240]}"
+                )
+            rows = response.json()
+            if isinstance(rows, list):
+                match = next((
+                    row for row in rows if isinstance(row, dict)
+                    and row.get("webhookURL") == self.helius_webhook_url
+                ), None)
+                if match:
+                    webhook_id = str(match.get("webhookID") or "")
+                    remote_addresses = sorted(
+                        str(address) for address in match.get("accountAddresses", [])
+                    )
+                    remote_types = {
+                        str(value).upper() for value in match.get("transactionTypes", [])
+                    }
+                    if (
+                        webhook_id and remote_addresses == addresses
+                        and {"SWAP", "BUY"}.issubset(remote_types)
+                        and match.get("active", True)
+                    ):
+                        state.update({
+                            "webhook_id": webhook_id,
+                            "webhook_url": self.helius_webhook_url,
+                            "account_addresses": addresses,
+                            "synced_at": int(time.time()),
+                        })
+                        return {
+                            "configured": True,
+                            "available": True,
+                            "mode": "enhanced-webhook",
+                            "wallets_monitored": len(addresses),
+                        }
+
+        body = {
+            "webhookURL": self.helius_webhook_url,
+            "transactionTypes": ["SWAP", "BUY"],
+            "accountAddresses": addresses,
+            "webhookType": "enhanced",
+            "authHeader": self.helius_webhook_secret,
+            "txnStatus": "success",
+        }
+        if webhook_id:
+            response = await self.client.put(
+                f"{self.helius_base}/v0/webhooks/{webhook_id}",
+                params=params,
+                json=body,
+            )
+        else:
+            response = await self.client.post(
+                f"{self.helius_base}/v0/webhooks", params=params, json=body
+            )
+        if response.status_code >= 400:
+            raise UpstreamError(
+                f"Helius webhooks respondeu {response.status_code}: {response.text[:240]}"
+            )
+        payload = response.json()
+        webhook_id = str(payload.get("webhookID") or webhook_id)
+        state.update({
+            "webhook_id": webhook_id,
+            "webhook_url": self.helius_webhook_url,
+            "account_addresses": addresses,
+            "synced_at": int(time.time()),
+        })
+        return {
+            "configured": True,
+            "available": True,
+            "mode": "enhanced-webhook",
+            "wallets_monitored": len(addresses),
+        }
+
+    @staticmethod
+    def _outgoing_payment(event: dict, wallet: str, incoming_mint: str) -> dict | None:
+        native_amount = sum(
+            max(0, _number(transfer.get("amount")))
+            for transfer in event.get("nativeTransfers", [])
+            if isinstance(transfer, dict)
+            and transfer.get("fromUserAccount") == wallet
+            and transfer.get("toUserAccount") != wallet
+        )
+        if native_amount > 0:
+            return {
+                "payment_mint": WSOL_MINT,
+                "payment_symbol": "SOL",
+                "payment_amount": round(native_amount / 1_000_000_000, 9),
+            }
+        outgoing = [
+            transfer for transfer in event.get("tokenTransfers", [])
+            if isinstance(transfer, dict)
+            and transfer.get("fromUserAccount") == wallet
+            and transfer.get("mint") != incoming_mint
+            and _number(transfer.get("tokenAmount")) > 0
+        ]
+        if outgoing:
+            payment = outgoing[0]
+            mint = str(payment.get("mint") or "")
+            symbol = "USDC" if mint == USDC_MINT else "USDT" if mint == USDT_MINT \
+                else "WSOL" if mint == WSOL_MINT else "TOKEN"
+            return {
+                "payment_mint": mint,
+                "payment_symbol": symbol,
+                "payment_amount": round(_number(payment.get("tokenAmount")), 9),
+            }
+        if event.get("feePayer") == wallet:
+            return {
+                "payment_mint": None,
+                "payment_symbol": "não identificado",
+                "payment_amount": None,
+            }
+        return None
+
+    async def _token_by_mint(self, mint: str) -> dict:
+        token_records = self._history_state.get("tokens", {})
+        record = token_records.get(mint)
+        if isinstance(record, dict) and isinstance(record.get("token"), dict):
+            return record["token"]
+        try:
+            payload = await self._get_json(
+                f"{self.jupiter_base}/tokens/v2/search",
+                params={"query": mint}, headers=self._jupiter_headers(),
+            )
+            exact = next((
+                row for row in payload if isinstance(row, dict) and row.get("id") == mint
+            ), None) if isinstance(payload, list) else None
+            if exact:
+                return self._normalize_token(exact)
+        except Exception:
+            pass
+        return {
+            "mint": mint,
+            "name": "Token novo",
+            "symbol": "?",
+            "icon": None,
+            "decimals": 0,
+            "first_pool_at": None,
+            "liquidity_usd": 0,
+            "mcap_usd": 0,
+            "usd_price": 0,
+            "holder_count": 0,
+            "organic_score": 0,
+            "safety_score": 0,
+            "risk_flags": ["metadata_unavailable"],
+            "jupiter_url": f"https://jup.ag/swap/SOL-{mint}",
+        }
+
+    async def process_helius_webhook(
+        self, payload: Any, *, send_alert=None
+    ) -> list[dict]:
+        events = payload if isinstance(payload, list) else [payload]
+        created: list[dict] = []
+        async with self._lock:
+            await self._load_history()
+            _, ranked_wallets, _ = self._aggregate_history()
+            ranked = {
+                wallet["wallet"]: {**wallet, "rank": index + 1}
+                for index, wallet in enumerate(ranked_wallets[: self.monitor_wallets])
+            }
+            purchases = self._history_state.setdefault("purchases", {})
+            wallet_mints = self._history_state.setdefault("wallet_mints", {})
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_type = str(event.get("type") or "").upper()
+                signature = str(event.get("signature") or "")
+                if event_type not in {"SWAP", "BUY"} or not signature:
+                    continue
+                for transfer in event.get("tokenTransfers", []):
+                    if not isinstance(transfer, dict):
+                        continue
+                    wallet = str(transfer.get("toUserAccount") or "")
+                    mint = str(transfer.get("mint") or "")
+                    standard = str(transfer.get("tokenStandard") or "").lower()
+                    amount = _number(transfer.get("tokenAmount"))
+                    if (
+                        wallet not in ranked or mint in PAYMENT_MINTS or amount <= 0
+                        or "nonfungible" in standard
+                        or not BASE58_ADDRESS.fullmatch(mint)
+                    ):
+                        continue
+                    payment = self._outgoing_payment(event, wallet, mint)
+                    if payment is None:
+                        continue
+                    event_id = f"{signature}:{wallet}:{mint}"
+                    seen = {
+                        str(item) for item in wallet_mints.get(wallet, [])
+                        if BASE58_ADDRESS.fullmatch(str(item))
+                    }
+                    if event_id in purchases or mint in seen:
+                        continue
+                    token = await self._token_by_mint(mint)
+                    purchased_at = _integer(
+                        event.get("timestamp"), int(time.time())
+                    )
+                    profile = ranked[wallet]
+                    purchase = {
+                        "event_id": event_id,
+                        "signature": signature,
+                        "purchased_at_unix": purchased_at,
+                        "wallet": wallet,
+                        "wallet_rank": profile["rank"],
+                        "wallet_score": profile.get("score", 0),
+                        "wallet_realized_pnl_usd": profile.get("realized_pnl_usd", 0),
+                        "wallet_win_rate_pct": profile.get("win_rate_pct", 0),
+                        "wallet_outcomes": profile.get("outcomes", 0),
+                        "mint": mint,
+                        "token_amount": round(amount, 9),
+                        "symbol": token.get("symbol", "?"),
+                        "name": token.get("name", "Token novo"),
+                        "icon": token.get("icon"),
+                        "usd_price": token.get("usd_price", 0),
+                        "liquidity_usd": token.get("liquidity_usd", 0),
+                        "mcap_usd": token.get("mcap_usd", 0),
+                        "holder_count": token.get("holder_count", 0),
+                        "safety_score": token.get("safety_score", 0),
+                        "risk_flags": token.get("risk_flags", []),
+                        "source": str(event.get("source") or "UNKNOWN"),
+                        "transaction_type": event_type,
+                        "first_wallet_buy": True,
+                        "alert_sent_at": 0,
+                        "alert_error": None,
+                        "solscan_url": f"https://solscan.io/account/{wallet}",
+                        "transaction_url": f"https://solscan.io/tx/{signature}",
+                        "jupiter_url": f"https://jup.ag/swap/SOL-{mint}",
+                        **payment,
+                    }
+                    purchases[event_id] = purchase
+                    seen.add(mint)
+                    wallet_mints[wallet] = sorted(seen)[-2_000:]
+                    created.append(purchase)
+
+            retained = self._purchase_rows()
+            self._history_state["purchases"] = {
+                row["event_id"]: row for row in retained
+            }
+            if created:
+                await self._save_history()
+                self._cache = None
+
+        if send_alert:
+            await self.deliver_pending_alerts(send_alert)
+        return created
+
+    async def deliver_pending_alerts(self, send_alert) -> int:
+        async with self._lock:
+            await self._load_history()
+            pending_ids = [
+                row["event_id"] for row in reversed(self._purchase_rows())
+                if not _integer(row.get("alert_sent_at"))
+            ]
+        delivered = 0
+        for event_id in pending_ids:
+            async with self._lock:
+                event = self._history_state.get("purchases", {}).get(event_id)
+                if not isinstance(event, dict) or _integer(event.get("alert_sent_at")):
+                    continue
+                outgoing = dict(event)
+            try:
+                await send_alert(outgoing)
+            except Exception as exc:
+                async with self._lock:
+                    current = self._history_state.get("purchases", {}).get(event_id)
+                    if isinstance(current, dict):
+                        current["alert_error"] = f"{type(exc).__name__}: {exc}"[:300]
+                        await self._save_history()
+                continue
+            async with self._lock:
+                current = self._history_state.get("purchases", {}).get(event_id)
+                if isinstance(current, dict):
+                    current["alert_sent_at"] = int(time.time())
+                    current["alert_error"] = None
+                    await self._save_history()
+                    self._cache = None
+            delivered += 1
+        return delivered
 
     async def snapshot(self, *, force: bool = False) -> dict:
         now = time.time()
@@ -799,8 +1190,12 @@ class SolanaIntelService:
                             "mode": "api-key" if self.jupiter_api_key else "keyless"},
                 "birdeye": {"configured": bool(self.birdeye_api_key), "available": False,
                             "mode": "api-key-required"},
-                "helius": {"configured": bool(self.helius_api_key), "available": None,
-                           "mode": "reserved-for-wallet-audit"},
+                "helius": {
+                    "configured": self.webhook_configured,
+                    "available": None,
+                    "mode": "webhook-not-configured",
+                    "wallets_monitored": 0,
+                },
                 "history": {
                     "configured": self.history_persistent,
                     "available": True,
@@ -893,6 +1288,21 @@ class SolanaIntelService:
                         "audited_at": generated_at,
                         "profile": profile,
                     }
+                for profile in wallet_profiles:
+                    if not profile.get("qualified"):
+                        continue
+                    # Seed the baseline only when a wallet first enters the
+                    # monitored cohort. Adding later Birdeye observations here
+                    # could race a Helius delivery and suppress a real alert.
+                    if profile["wallet"] in self._history_state.get("wallet_mints", {}):
+                        continue
+                    self._remember_wallet_mints(
+                        profile["wallet"],
+                        {
+                            item["mint"] for item in observations
+                            if item["wallet"] == profile["wallet"]
+                        },
+                    )
                 providers["birdeye"]["available"] = enriched_tokens > 0
             elif self.birdeye_api_key:
                 providers["birdeye"]["available"] = True
@@ -948,6 +1358,18 @@ class SolanaIntelService:
                         mint, ["no_quality_wallet"]
                     )
 
+            opportunities, wallets, rejection_reasons = self._aggregate_history()
+            try:
+                providers["helius"] = await self._sync_helius_webhook(wallets)
+            except Exception as exc:
+                providers["helius"] = {
+                    "configured": self.webhook_configured,
+                    "available": False,
+                    "mode": "enhanced-webhook",
+                    "wallets_monitored": 0,
+                }
+                errors.append({"provider": "helius", "message": str(exc)})
+
             history_save_error = None
             if not history_load_error:
                 history_save_error = await self._save_history()
@@ -955,7 +1377,7 @@ class SolanaIntelService:
                 providers["history"]["available"] = False
                 errors.append({"provider": "history", "message": history_save_error})
 
-            opportunities, wallets, rejection_reasons = self._aggregate_history()
+            purchases = self._purchase_rows()
             token_records = self._history_state.get("tokens", {})
             analyzed_tokens = sum(
                 _integer(record.get("analyzed_at")) > 0
@@ -983,12 +1405,27 @@ class SolanaIntelService:
                     "wallet_candidates": len(wallet_candidates),
                     "wallets_evaluated": len(wallet_profiles),
                     "quality_wallets": len(wallets),
+                    "monitored_wallets": _integer(
+                        providers["helius"].get("wallets_monitored")
+                    ),
+                    "realized_pnl_usd": round(sum(
+                        _number(wallet.get("realized_pnl_usd")) for wallet in wallets
+                    ), 2),
+                    "purchase_alerts": len(purchases),
+                    "purchase_alerts_24h": sum(
+                        generated_at - _integer(row.get("purchased_at_unix")) <= 86_400
+                        for row in purchases
+                    ),
+                    "pending_alert_delivery": sum(
+                        not _integer(row.get("alert_sent_at")) for row in purchases
+                    ),
                     "opportunities": len(opportunities),
                     "rejected_tokens": max(0, analyzed_tokens - len(opportunities)),
                     "early_wallets": sum(wallet["early_buys"] > 0 for wallet in wallets),
                     "robust_wallets": sum(wallet["confidence"] == "robust" for wallet in wallets),
                 },
                 "wallets": wallets,
+                "purchases": purchases,
                 "opportunities": opportunities,
                 "tokens": tokens,
                 "errors": errors[:20],
@@ -1003,9 +1440,14 @@ class SolanaIntelService:
                     "reanalyze_seconds": self.reanalyze_seconds,
                     "history_persistent": self.history_persistent,
                     "ranking": (
-                        "Wilson ajustado + amostra de compras/vendas + PnL realizado "
-                        "+ disciplina de saída"
+                        "PnL realizado decrescente após piso de qualidade: Wilson "
+                        "+ amostra de compras/vendas + disciplina de saída"
                     ),
+                    "alert_rule": (
+                        "primeira compra observada de um mint por carteira ranqueada; "
+                        "SWAP/BUY confirmado pela Helius e deduplicado por assinatura"
+                    ),
+                    "monitor_wallets": self.monitor_wallets,
                     "disqualifying_tags": ["dev", "insider", "bundler"],
                     "minimums": {
                         "liquidity_usd": self.min_liquidity_usd,

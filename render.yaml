@@ -25,8 +25,14 @@ services:
         sync: false
       - key: HELIUS_API_KEY
         sync: false
+      - key: HELIUS_WEBHOOK_URL
+        sync: false
+      - key: HELIUS_WEBHOOK_SECRET
+        generateValue: true
       - key: SOLANA_INTEL_MAX_TOKENS
         value: "12"
+      - key: SOLANA_INTEL_MONITOR_WALLETS
+        value: "25"
       - key: SOLANA_INTEL_CACHE_SECONDS
         value: "300"
       - key: LOG_LEVEL

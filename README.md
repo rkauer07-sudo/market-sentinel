@@ -69,31 +69,41 @@ padrão, a interface escuta somente no computador local.
 A página **Memecoins Analyser** fica em `/memecoins-analyser` e é um módulo
 read-only independente do radar de futuros:
 
-- Jupiter Tokens V2 lista pools recentes e fornece metadados, liquidez, holders,
-  Organic Score e autoridades do token;
-- Jupiter Swap V2 valida, sob demanda, a existência de rotas de compra e venda
-  por cotação sem `taker`; nenhuma transação é criada, assinada ou enviada;
-- Birdeye cruza os lançamentos com traders `sniper` e `smart_trader` e valida
-  cada carteira pelo histórico de PnL de 90 dias, incluindo compras, vendas,
-  resultados encerrados, taxa de acerto e lucro realizado;
-- apenas tokens com estrutura mínima e pelo menos uma carteira qualificada são
-  promovidos a oportunidade; tags `dev`, `insider` e `bundler` desqualificam a
-  carteira;
-- cada coleta lê até 30 lançamentos recentes, remove duplicatas e os acumula em
-  uma janela persistente de 24 horas com capacidade padrão de 500 tokens;
-- tokens já analisados e históricos recentes de carteiras são reutilizados para
-  controlar o consumo de Compute Units da Birdeye;
-- Helius fica reservado para a próxima camada de auditoria histórica completa.
+- Jupiter Tokens V2 fornece a coorte de memecoins recentes usada para descobrir
+  traders e enriquece cada mint comprado com nome, liquidez, holders e riscos;
+- Birdeye cruza os top traders `sniper`/`smart_trader` e audita 90 dias de PnL,
+  compras, vendas, resultados encerrados e taxa de acerto;
+- primeiro são aplicados pisos de qualidade (amostra, compra, venda, acerto e
+  PnL positivo); as carteiras aprovadas são então ordenadas pelo **maior lucro
+  realizado**, não pelo score composto;
+- tags `dev`, `insider` e `bundler` desqualificam uma carteira;
+- as melhores carteiras são sincronizadas com um webhook Enhanced da Helius,
+  filtrado para `SWAP` e `BUY` confirmados;
+- um alerta só nasce quando a carteira recebe, em troca de SOL ou outro token,
+  um mint fungível ainda não observado para ela. Reforços, vendas, airdrops,
+  NFTs e entregas repetidas do webhook não duplicam o alerta;
+- a compra é salva no painel e enviada ao Telegram com ranking da carteira, PnL,
+  taxa de acerto, valor detectado, metadados do token e links da transação;
+- Jupiter Swap V2 continua validando rotas sob demanda, sem `taker`: nenhuma
+  transação é criada, assinada ou enviada.
 
-Crie uma chave gratuita no portal da Jupiter e uma chave Birdeye para liberar o
-ranking completo. Configure-as apenas no backend:
+Configure as chaves apenas no backend. `HELIUS_WEBHOOK_URL` deve ser a URL pública
+completa do receptor, por exemplo
+`https://seu-dominio.com/api/solana-intel/helius`. O serviço cria o webhook na
+primeira sincronização e só o atualiza quando muda o conjunto de carteiras, para
+evitar consumo desnecessário de créditos:
 
 ```env
 JUPITER_API_KEY=...
 BIRDEYE_API_KEY=...
-HELIUS_API_KEY=...              # opcional nesta versão
+HELIUS_API_KEY=...
+HELIUS_WEBHOOK_URL=https://seu-dominio.com/api/solana-intel/helius
+HELIUS_WEBHOOK_SECRET=...       # segredo longo; nunca exponha no frontend
+HELIUS_WEBHOOK_ID=...           # opcional; reutiliza um webhook já existente
 SOLANA_INTEL_MAX_TOKENS=30
 SOLANA_INTEL_MAX_WALLETS=50
+SOLANA_INTEL_MONITOR_WALLETS=25
+SOLANA_INTEL_PURCHASE_HISTORY_LIMIT=200
 SOLANA_INTEL_HISTORY_LIMIT=500
 SOLANA_INTEL_HISTORY_HOURS=24
 SOLANA_INTEL_REANALYZE_SECONDS=21600
@@ -108,10 +118,10 @@ SOLANA_INTEL_CACHE_SECONDS=300
 ```
 
 Sem `JUPITER_API_KEY`, o serviço tenta o acesso keyless com limite menor. Sem
-`BIRDEYE_API_KEY`, nenhum lançamento é promovido a oportunidade, pois falta a
-evidência histórica das carteiras. O histórico pode não estar totalmente
-retroalimentado pelo provedor; por isso o resultado é um filtro investigativo,
-não uma garantia de retorno.
+`BIRDEYE_API_KEY`, não há ranking verificável. Sem as três variáveis Helius, o
+ranking ainda funciona, mas não há alerta em tempo real. O histórico do provedor
+pode ser incompleto e uma entidade pode usar várias carteiras; o resultado é um
+filtro investigativo, não uma garantia de retorno.
 
 A janela usa o mesmo Supabase Storage já configurado pelo projeto. Com
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_STORAGE_BUCKET`, o objeto
@@ -129,9 +139,9 @@ carteiras pendente.
 Para produção na Vercel, abra **Project Settings > Environment Variables**, crie
 `BIRDEYE_API_KEY` (obrigatória para o ranking completo) e, de preferência,
 `JUPITER_API_KEY`. Marque os ambientes Production e Preview e faça um redeploy.
-`HELIUS_API_KEY` pode ficar ausente enquanto a auditoria histórica ampliada não
-for habilitada. Nunca use prefixo `NEXT_PUBLIC_` nessas variáveis: elas devem
-permanecer exclusivamente no backend.
+Para ativar os alertas no worker, adicione também `HELIUS_API_KEY`,
+`HELIUS_WEBHOOK_URL` e `HELIUS_WEBHOOK_SECRET` aos Secrets. Nunca use o prefixo
+`NEXT_PUBLIC_`: essas variáveis devem permanecer exclusivamente no backend.
 
 ## Login Web3 e chat
 

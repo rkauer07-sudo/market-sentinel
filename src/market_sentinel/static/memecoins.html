@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Análise read-only de lançamentos, carteiras precoces e rotas de memecoins na Solana.">
+  <meta name="description" content="Ranking read-only de carteiras lucrativas de memecoins e alertas de novas compras na Solana.">
   <title>Memecoins Analyser · Market Sentinel</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23090c0a'/%3E%3Crect x='13' y='13' width='38' height='38' transform='rotate(45 32 32)' fill='none' stroke='%2371e3bb' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='9' fill='%2371e3bb'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/solana-intel.css">
@@ -25,37 +25,37 @@
   <main class="memecoin-shell">
     <section class="memecoin-intro">
       <div class="memecoin-intro-copy">
-        <div class="memecoin-overline">SOLANA · LAUNCH FORENSICS · PUBLIC LEDGER</div>
+        <div class="memecoin-overline">SOLANA · SMART WALLETS · LIVE PURCHASES</div>
         <h1>MEMECOINS<br><em>ANALYSER</em></h1>
-        <p>Um filtro de convicção para memecoins recém-lançadas: só promove moedas seguras o bastante e acompanhadas por carteiras com histórico consistente de compra, venda e lucro realizado.</p>
+        <p>Encontra as carteiras que realmente compram, vendem e realizam lucro com memecoins. Depois acompanha as melhores em tempo real e alerta quando uma delas abre posição em um mint ainda não observado.</p>
         <div class="memecoin-principles">
-          <span><b>01</b> primeiro pool</span>
-          <span><b>02</b> entrada precoce</span>
+          <span><b>01</b> compra + venda</span>
+          <span><b>02</b> lucro realizado</span>
           <span><b>03</b> histórico 90d</span>
-          <span><b>04</b> filtro de convicção</span>
+          <span><b>04</b> alerta imediato</span>
         </div>
       </div>
       <aside class="memecoin-orbit" aria-label="Metodologia resumida">
         <div class="orbit-ring orbit-ring-one"></div>
         <div class="orbit-ring orbit-ring-two"></div>
-        <div class="orbit-core"><span>≤120s</span><small>EARLY WINDOW</small></div>
+        <div class="orbit-core"><span>LIVE</span><small>WALLET WATCH</small></div>
         <div class="orbit-label orbit-label-a">JUPITER</div>
         <div class="orbit-label orbit-label-b">BIRDEYE</div>
-        <div class="orbit-label orbit-label-c">SOLANA</div>
+        <div class="orbit-label orbit-label-c">HELIUS</div>
       </aside>
     </section>
 
     <section id="solana-intel" class="solana-intel">
       <div class="solana-intel-hero">
         <div>
-          <div class="solana-kicker">LIVE DATA PIPELINE</div>
-          <h2>Oportunidades com evidência on-chain</h2>
-          <p class="solana-intel-intro">A Jupiter descobre lançamentos e valida rotas. A Birdeye confirma o histórico de 90 dias das carteiras. Só aparecem moedas que vencem os cortes de segurança, liquidez, amostra, compra e venda; dev, insider e bundler são excluídos.</p>
+          <div class="solana-kicker">PROFIT-LED WALLET INTELLIGENCE</div>
+          <h2>Carteiras lucrativas. Compras novas. Alertas.</h2>
+          <p class="solana-intel-intro">A Birdeye descobre traders de memecoins e confirma 90 dias de compras, vendas, resultados encerrados e PnL realizado. As carteiras aprovadas são ordenadas pelo lucro; a Helius vigia swaps confirmados e a Jupiter enriquece cada novo mint.</p>
           <div class="provider-strip">
             <span id="provider-jupiter" class="provider-chip waiting">Jupiter · verificando</span>
             <span id="provider-birdeye" class="provider-chip waiting">Birdeye · verificando</span>
             <span id="provider-history" class="provider-chip waiting">Histórico · verificando</span>
-            <span id="provider-helius" class="provider-chip waiting">Helius · opcional</span>
+            <span id="provider-helius" class="provider-chip waiting">Helius · verificando</span>
           </div>
         </div>
         <div class="solana-hero-actions">
@@ -65,23 +65,23 @@
       </div>
       <div id="solanaIntelSetup" class="solana-setup"></div>
       <div class="solana-metrics">
-        <div class="solana-metric"><span>Lançamentos na janela</span><b id="intelRecentTokens">—</b></div>
-        <div class="solana-metric"><span>Analisados</span><b id="intelEligibleTokens">—</b></div>
-        <div class="solana-metric"><span>Oportunidades</span><b id="intelOpportunities" class="accent">—</b></div>
-        <div class="solana-metric"><span>Carteiras de qualidade</span><b id="intelQualityWallets">—</b></div>
-        <div class="solana-metric"><span>Aguardando análise</span><b id="intelRejectedTokens">—</b></div>
+        <div class="solana-metric"><span>Carteiras ranqueadas</span><b id="intelRecentTokens">—</b></div>
+        <div class="solana-metric"><span>Carteiras monitoradas</span><b id="intelEligibleTokens">—</b></div>
+        <div class="solana-metric"><span>Compras novas · 24h</span><b id="intelOpportunities" class="accent">—</b></div>
+        <div class="solana-metric"><span>PnL realizado · ranking</span><b id="intelQualityWallets">—</b></div>
+        <div class="solana-metric"><span>Alertas pendentes</span><b id="intelRejectedTokens">—</b></div>
       </div>
       <div class="solana-intel-grid">
         <div class="solana-column">
-          <div class="solana-column-head"><span>Carteiras que sustentam o sinal</span><span>histórico 90d · saída comprovada · Wilson</span></div>
+          <div class="solana-column-head"><span>Ranking de carteiras lucrativas</span><span>PnL realizado ↓ · histórico 90d · saídas comprovadas</span></div>
           <div id="smartWalletList" class="smart-wallet-list"><div class="intel-empty"><strong>Carregando carteiras</strong>Aguardando dados dos provedores.</div></div>
         </div>
         <div class="solana-column">
-          <div class="solana-column-head"><span>Oportunidades filtradas</span><span>carteira · estrutura · convicção · rota</span></div>
-          <div id="solanaLaunchList" class="launch-list"><div class="intel-empty"><strong>Aplicando filtro de qualidade</strong>Cruzando Tokens V2 com o histórico das carteiras.</div></div>
+          <div class="solana-column-head"><span>Compras novas detectadas</span><span>webhook · swap confirmado · primeiro mint</span></div>
+          <div id="solanaLaunchList" class="launch-list"><div class="intel-empty"><strong>Aguardando a próxima compra</strong>O monitor exibirá aqui o primeiro swap de um novo mint por carteira ranqueada.</div></div>
         </div>
       </div>
-      <div class="solana-method"><strong>Score investigativo, não recomendação de compra.</strong><span>Janela acumulada de 24h · até 500 lançamentos · 30 novos por ciclo · histórico Birdeye 90d pode ser incompleto</span></div>
+      <div class="solana-method"><strong>Rastreamento investigativo, não recomendação de compra.</strong><span>Ranking Birdeye 90d · webhooks Helius confirmados · alertas deduplicados · histórico do provedor pode ser incompleto</span></div>
     </section>
 
     <footer class="memecoin-footer">

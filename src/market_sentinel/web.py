@@ -16,7 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import __version__
@@ -85,7 +85,32 @@ class Dashboard:
             except asyncio.CancelledError: raise
             except Exception as exc:
                 self.last_error = str(exc); logging.getLogger(__name__).exception("Falha no ciclo automático")
+            try:
+                await self.solana_intel.snapshot(force=True)
+                if self.sentinel.notifier.configured:
+                    await self.solana_intel.deliver_pending_alerts(
+                        self.sentinel.notifier.send_memecoin_purchase
+                    )
+            except asyncio.CancelledError: raise
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Falha no ciclo do monitor de smart wallets"
+                )
             await asyncio.sleep(max(0, interval - (time.monotonic() - cycle_started)))
+
+    async def handle_helius_webhook(self, payload):
+        callback = (
+            self.sentinel.notifier.send_memecoin_purchase
+            if self.sentinel.notifier.configured else None
+        )
+        purchases = await self.solana_intel.process_helius_webhook(
+            payload, send_alert=callback
+        )
+        for purchase in purchases:
+            logging.getLogger(__name__).info(
+                "SMART WALLET BUY #%s %s %s",
+                purchase["wallet_rank"], purchase["symbol"], purchase["wallet"],
+            )
 
     def start(self):
         if self.task and not self.task.done(): return False
@@ -203,6 +228,10 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
+        if request.url.path == "/api/solana-intel/helius":
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            return response
         if request.url.path.startswith("/api/") and not dashboard.running:
             # sqlite3 connections are thread-bound by default. Keep refresh in
             # the request thread so closing/reopening the shared connection is safe.
@@ -406,6 +435,24 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     @app.post("/api/solana-intel/refresh")
     async def refresh_solana_intel():
         return await dashboard.solana_intel.snapshot(force=True)
+
+    @app.post("/api/solana-intel/helius", include_in_schema=False)
+    async def solana_intel_helius(request: Request, background_tasks: BackgroundTasks):
+        supplied = (
+            request.headers.get("Authorization")
+            or request.headers.get("X-Helius-Auth")
+        )
+        if not dashboard.solana_intel.webhook_authorized(supplied):
+            raise HTTPException(401, "Webhook Helius não autorizado")
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(400, "Payload JSON inválido") from exc
+        events = payload if isinstance(payload, list) else [payload]
+        if not events or not all(isinstance(event, dict) for event in events):
+            raise HTTPException(400, "Payload Helius inválido")
+        background_tasks.add_task(dashboard.handle_helius_webhook, events)
+        return {"accepted": len(events)}
 
     @app.get("/api/solana-intel/routes/{mint}")
     async def solana_intel_routes(mint: str, amount_sol: float = 0.25):
