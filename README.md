@@ -96,6 +96,9 @@ completa do receptor, por exemplo
 primeira sincronização e só o atualiza quando muda o conjunto de carteiras, para
 evitar consumo desnecessário de créditos:
 
+Use um domínio estável de produção, sem autenticação de preview ou Deployment
+Protection; a Helius precisa alcançar esse endpoint diretamente por HTTPS.
+
 ```env
 JUPITER_API_KEY=...
 BIRDEYE_API_KEY=...
