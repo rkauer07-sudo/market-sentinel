@@ -211,7 +211,7 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
             }})
         assert request.url.path == "/defi/v2/tokens/top_traders"
         api_calls["top_traders"] += 1
-        assert query["wallet_tags"] == ["sniper,smart_trader"]
+        assert "wallet_tags" not in query  # no server-side tag filter by default
         mint = query["address"][0]
         pnl = {MINT_A: 1200, MINT_B: 800, MINT_C: 600}[mint]
         delay = {MINT_A: 35, MINT_B: 70, MINT_C: 105}[mint]
@@ -715,3 +715,18 @@ async def test_read_only_mode_skips_enrichment(monkeypatch):
     assert hits["birdeye"] == 0                       # no live Birdeye calls
     assert snapshot["summary"]["enriched_tokens"] == 0
     assert snapshot["methodology"]["enrich_on_read"] is False
+
+
+async def test_wallet_tag_filter_is_opt_in(monkeypatch):
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    monkeypatch.setenv("SOLANA_INTEL_BIRDEYE_WALLET_TAGS", "smart_trader")
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen["query"] = parse_qs(request.url.query.decode())
+        return httpx.Response(200, json={"data": {"items": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await SolanaIntelService(client)._top_traders({"mint": MINT_A})
+
+    assert seen["query"]["wallet_tags"] == ["smart_trader"]

@@ -152,6 +152,12 @@ class SolanaIntelService:
         self.enrich_on_read = os.getenv(
             "SOLANA_INTEL_ENRICH_ON_READ", "true"
         ).strip().lower() not in ("0", "false", "no", "off")
+        # Optional server-side Birdeye top-trader tag filter (e.g. "smart_trader").
+        # Empty by default: fresh tokens have no tagged traders yet, so filtering
+        # server-side returns nothing. Quality is enforced client-side instead.
+        self.birdeye_wallet_tags = os.getenv(
+            "SOLANA_INTEL_BIRDEYE_WALLET_TAGS", ""
+        ).strip()
         # The Jupiter "recent" cohort is seconds-to-minutes old: liquidity sits in
         # the low single-digit thousands and Jupiter's organic score is still 0.
         # Mature-token thresholds (25k liquidity, organic >= 30) reject 100% of it,
@@ -481,17 +487,23 @@ class SolanaIntelService:
         }
 
     async def _top_traders(self, token: dict) -> list[dict]:
+        params = {
+            "address": token["mint"],
+            "time_frame": "all_time",
+            "sort_type": "desc",
+            "sort_by": "realized_pnl",
+            "offset": 0,
+            "limit": 10,
+        }
+        # A server-side tag filter returns nothing for freshly launched tokens
+        # (Birdeye has not tagged their buyers yet), which starved the whole
+        # pipeline. Fetch the top traders by realized PnL and let the client-side
+        # qualification (90d PnL track record; dev/insider/bundler excluded)
+        # decide. Opt back into the server filter via SOLANA_INTEL_BIRDEYE_WALLET_TAGS.
+        if self.birdeye_wallet_tags:
+            params["wallet_tags"] = self.birdeye_wallet_tags
         payload = await self._birdeye_get(
-            f"{self.birdeye_base}/defi/v2/tokens/top_traders",
-            params={
-                "address": token["mint"],
-                "time_frame": "all_time",
-                "sort_type": "desc",
-                "sort_by": "realized_pnl",
-                "offset": 0,
-                "limit": 10,
-                "wallet_tags": "sniper,smart_trader",
-            },
+            f"{self.birdeye_base}/defi/v2/tokens/top_traders", params=params,
         )
         data = payload.get("data", payload) if isinstance(payload, dict) else {}
         if isinstance(data, list):
