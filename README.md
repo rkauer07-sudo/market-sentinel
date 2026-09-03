@@ -73,9 +73,20 @@ read-only independente do radar de futuros:
   traders e enriquece cada mint comprado com nome, liquidez, holders e riscos;
 - Birdeye cruza os top traders `sniper`/`smart_trader`, o PnL realizado por mint
   e o resumo de 90 dias de cada carteira;
-- o corte é deliberadamente agressivo: **3 memecoins diferentes com PnL
-  realizado positivo** já colocam a carteira no monitor. Mints repetidos e
-  lucro apenas não realizado não contam;
+- uma carteira entra no monitor por **um de dois caminhos** (sempre sem as tags
+  `dev`, `insider`, `bundler`): (a) **3 memecoins diferentes com PnL realizado
+  positivo** na coorte recente, ou (b) **track record 90d comprovado** pela
+  Birdeye — PnL realizado acima de `SOLANA_INTEL_MIN_PNL_QUALIFYING_USD`, taxa
+  de acerto acima de `SOLANA_INTEL_MIN_PNL_WIN_RATE`% em pelo menos
+  `SOLANA_INTEL_MIN_PNL_OUTCOMES` resultados e ao menos uma memecoin lucrativa
+  observada. O caminho (b) evita que carteiras excelentes fiquem de fora só
+  porque um lote pequeno de lançamentos expõe apenas um de seus mints. Mints
+  repetidos e lucro apenas não realizado continuam não contando;
+- a página destaca **Memecoins promissoras**: cada token que passou no filtro
+  estrutural e tem carteiras qualificadas comprando aparece com os players
+  dentro (PnL realizado, acerto, nº de memecoins lucrativas e marca de entrada
+  precoce), score de oportunidade e link para a jup.ag — isso funciona só com a
+  Birdeye, sem depender da Helius;
 - as carteiras aprovadas são ordenadas pelo **maior lucro realizado**, não pelo
   score composto; compras, vendas e taxa de acerto permanecem como contexto;
 - tags `dev`, `insider` e `bundler` desqualificam uma carteira;
@@ -117,9 +128,13 @@ SOLANA_INTEL_WALLET_CACHE_SECONDS=21600
 SOLANA_INTEL_MAX_CONCURRENCY=4
 SOLANA_INTEL_HISTORY_OBJECT=solana-intel-history.json
 SOLANA_INTEL_MIN_LIQUIDITY_USD=25000
-SOLANA_INTEL_MIN_TOKEN_SAFETY=70
+SOLANA_INTEL_MIN_TOKEN_SAFETY=65
 SOLANA_INTEL_MIN_PROFITABLE_MEMECOINS=3
-SOLANA_INTEL_MIN_OPPORTUNITY_SCORE=72
+SOLANA_INTEL_MIN_OPPORTUNITY_SCORE=58
+SOLANA_INTEL_MIN_PNL_QUALIFYING_USD=5000
+SOLANA_INTEL_MIN_PNL_WIN_RATE=40
+SOLANA_INTEL_MIN_PNL_OUTCOMES=8
+SOLANA_INTEL_MIN_PNL_PROFITABLE_MEMECOINS=1
 SOLANA_INTEL_CACHE_SECONDS=300
 ```
 

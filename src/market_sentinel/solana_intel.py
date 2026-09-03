@@ -132,7 +132,7 @@ class SolanaIntelService:
             5_000, _number(os.getenv("SOLANA_INTEL_MIN_LIQUIDITY_USD"), 25_000)
         )
         self.min_token_safety = max(
-            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_TOKEN_SAFETY"), 70))
+            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_TOKEN_SAFETY"), 65))
         )
         self.min_profitable_memecoins = max(
             1, min(20, _integer(
@@ -140,7 +140,27 @@ class SolanaIntelService:
             ))
         )
         self.min_opportunity_score = max(
-            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_OPPORTUNITY_SCORE"), 72))
+            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_OPPORTUNITY_SCORE"), 58))
+        )
+        # Alternative wallet-qualification path. The primary rule demands several
+        # distinct profitable cohort mints, which is rare inside a single small
+        # launch batch and starves the ranking. A wallet whose 90-day Birdeye
+        # summary already proves a strong realized track record qualifies too,
+        # provided it is tied to at least one profitable memecoin we can see and
+        # carries none of the disqualifying tags.
+        self.min_pnl_qualifying_usd = max(
+            0.0, _number(os.getenv("SOLANA_INTEL_MIN_PNL_QUALIFYING_USD"), 5_000)
+        )
+        self.min_pnl_win_rate = max(
+            0.0, min(100.0, _number(os.getenv("SOLANA_INTEL_MIN_PNL_WIN_RATE"), 40))
+        )
+        self.min_pnl_outcomes = max(
+            1, min(500, _integer(os.getenv("SOLANA_INTEL_MIN_PNL_OUTCOMES"), 8))
+        )
+        self.min_pnl_profitable_memecoins = max(
+            1, min(20, _integer(
+                os.getenv("SOLANA_INTEL_MIN_PNL_PROFITABLE_MEMECOINS"), 1
+            ))
         )
         self.cache_seconds = max(
             30, min(3600, _integer(os.getenv("SOLANA_INTEL_CACHE_SECONDS"), 300))
@@ -669,11 +689,44 @@ class SolanaIntelService:
             item.get("entry_delay_seconds") is None,
             _integer(item.get("entry_delay_seconds"), 10**9),
         ))
+        # Two independent ways in, both requiring clean tags:
+        #  - strong cohort evidence (several distinct profitable mints), or
+        #  - a proven 90-day realized track record (PnL, win rate and sample
+        #    size) tied to at least one profitable memecoin in the cohort.
+        realized_pnl = _number(profile.get("realized_pnl_usd"))
+        win_rate_pct = _number(profile.get("win_rate_pct"))
+        outcomes = _integer(profile.get("outcomes"))
+        cohort_qualified = profitable_count >= self.min_profitable_memecoins
+        pnl_qualified = (
+            profitable_count >= self.min_pnl_profitable_memecoins
+            and realized_pnl >= self.min_pnl_qualifying_usd
+            and win_rate_pct >= self.min_pnl_win_rate
+            and outcomes >= self.min_pnl_outcomes
+        )
+        qualified = bool(risk_penalty == 0 and (cohort_qualified or pnl_qualified))
+        if cohort_qualified:
+            qualification_basis = "cohort"
+            qualification_rule = (
+                f">={self.min_profitable_memecoins} memecoins distintas com "
+                "PnL realizado positivo"
+            )
+        elif pnl_qualified:
+            qualification_basis = "track_record"
+            qualification_rule = (
+                f"PnL realizado 90d >= ${self.min_pnl_qualifying_usd:,.0f}, "
+                f"acerto >= {self.min_pnl_win_rate:.0f}% em >= "
+                f"{self.min_pnl_outcomes} resultados"
+            )
+        else:
+            qualification_basis = "none"
+            qualification_rule = (
+                f">={self.min_profitable_memecoins} memecoins distintas OU "
+                f"PnL realizado 90d >= ${self.min_pnl_qualifying_usd:,.0f} "
+                f"com acerto e amostra suficientes"
+            )
         profile.update({
-            "qualified": bool(
-                risk_penalty == 0
-                and profitable_count >= self.min_profitable_memecoins
-            ),
+            "qualified": qualified,
+            "qualification_basis": qualification_basis,
             "recent_tokens_seen": max(
                 _integer(profile.get("recent_tokens_seen")),
                 len(evidence_by_mint),
@@ -699,10 +752,7 @@ class SolanaIntelService:
                 else "established" if profitable_count >= 5
                 else "aggressive"
             ),
-            "qualification_rule": (
-                f">={self.min_profitable_memecoins} memecoins distintas com "
-                "PnL realizado positivo"
-            ),
+            "qualification_rule": qualification_rule,
             "observations": ordered_observations[:12],
         })
         return profile
@@ -1563,8 +1613,11 @@ class SolanaIntelService:
                     "history_persistent": self.history_persistent,
                     "ranking": (
                         "PnL realizado decrescente entre carteiras com pelo menos "
-                        f"{self.min_profitable_memecoins} memecoins distintas e "
-                        "PnL realizado positivo"
+                        f"{self.min_profitable_memecoins} memecoins distintas com "
+                        "PnL realizado positivo, OU com histórico 90d comprovado "
+                        f"(>= ${self.min_pnl_qualifying_usd:,.0f} realizados, acerto "
+                        f">= {self.min_pnl_win_rate:.0f}% em >= {self.min_pnl_outcomes} "
+                        "resultados) e ao menos uma memecoin lucrativa observada"
                     ),
                     "alert_rule": (
                         "primeira compra observada de um mint por carteira ranqueada; "
@@ -1577,6 +1630,9 @@ class SolanaIntelService:
                         "token_safety": self.min_token_safety,
                         "opportunity_score": self.min_opportunity_score,
                         "profitable_memecoins": self.min_profitable_memecoins,
+                        "pnl_qualifying_usd": self.min_pnl_qualifying_usd,
+                        "pnl_win_rate": self.min_pnl_win_rate,
+                        "pnl_outcomes": self.min_pnl_outcomes,
                     },
                     "rejection_reasons": rejection_reasons,
                     "entry_delay_is_approximate": True,

@@ -117,6 +117,50 @@
     }).join('');
   }
 
+  const basisLabels = {
+    cohort: 'lucro em várias memecoins', track_record: 'track record 90d', none: 'contexto',
+  };
+
+  function renderOpportunities(opportunities = [], birdeyeConfigured = false) {
+    const box = document.querySelector('#solanaOpportunityList');
+    if (!box) return;
+    if (!birdeyeConfigured) {
+      box.innerHTML = '<div class="intel-empty"><strong>Análise aguardando a Birdeye</strong>Configure <code>BIRDEYE_API_KEY</code> no backend para cruzar as carteiras que estão dentro de cada memecoin.</div>';
+      return;
+    }
+    if (!opportunities.length) {
+      box.innerHTML = '<div class="intel-empty"><strong>Nenhuma memecoin com players qualificados ainda</strong>A memecoin aparece aqui quando passa no filtro estrutural (liquidez, autoridade de mint/freeze, concentração e segurança) e tem pelo menos uma carteira qualificada comprando. A janela vai preenchendo a cada ciclo.</div>';
+      return;
+    }
+    box.innerHTML = opportunities.slice(0, 24).map(op => {
+      const icon = op.icon
+        ? `<img src="${escapeHTML(op.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+        : escapeHTML((op.symbol || '?').slice(0, 2));
+      const conviction = op.conviction === 'high' ? 'ALTA CONVICÇÃO' : 'SELETIVA';
+      const flags = (op.risk_flags || []);
+      const flagHTML = flags.length
+        ? flags.map(flag => `<span class="risk-flag">${escapeHTML(flagLabels[flag] || flag)}</span>`).join('')
+        : '<span class="risk-flag clean">sem alerta estrutural nos campos disponíveis</span>';
+      const players = (op.wallet_evidence || []).map(player => `
+        <a class="op-player" href="${escapeHTML(player.solscan_url)}" target="_blank" rel="noopener noreferrer">
+          <span class="op-player-addr">${escapeHTML(short(player.wallet))}${player.early ? ' <i class="op-early">entrada precoce</i>' : ''}</span>
+          <span class="op-player-stats"><b class="${player.realized_pnl_usd >= 0 ? 'positive' : ''}">${money(player.realized_pnl_usd)}</b> · ${Number(player.win_rate_pct).toFixed(0)}% acerto · ${compact(player.profitable_memecoins)} memecoins · score ${player.score}</span>
+        </a>`).join('');
+      return `<article class="launch-card opportunity-card" data-mint="${escapeHTML(op.mint)}">
+        <div class="launch-icon">${icon}</div>
+        <div>
+          <div class="launch-name-row"><span class="launch-name">${escapeHTML(op.symbol)} · ${escapeHTML(op.name)}</span><span class="conviction-pill ${op.conviction === 'high' ? 'high' : ''}">${conviction}</span><span class="op-score">score ${Number(op.opportunity_score)}/100</span></div>
+          <div class="launch-meta"><span>Liquidez <b>${money(op.liquidity_usd)}</b></span><span>Market cap <b>${money(op.mcap_usd)}</b></span><span>Holders <b>${compact(op.holder_count)}</b></span><span>Safety <b>${Number(op.safety_score || 0)}/100</b></span></div>
+          <div class="safety-track" title="Score estrutural, não previsão de retorno"><i style="width:${Math.max(0, Math.min(100, Number(op.safety_score)))}%"></i></div>
+          <div class="op-players-head">${compact(op.quality_wallet_count)} carteira(s) qualificada(s) dentro</div>
+          <div class="op-players">${players}</div>
+          <div class="launch-flags">${flagHTML}</div>
+        </div>
+        <div class="launch-actions"><button class="route-button" data-route-mint="${escapeHTML(op.mint)}">Validar rotas Jupiter</button><a class="jupiter-link" href="${escapeHTML(op.jupiter_url)}" target="_blank" rel="noopener noreferrer">Abrir na jup.ag ↗</a><span class="route-result" data-route-result="${escapeHTML(op.mint)}"></span></div>
+      </article>`;
+    }).join('');
+  }
+
   function renderPurchases(purchases = [], heliusConfigured = false) {
     const box = document.querySelector('#solanaLaunchList');
     if (!box) return;
@@ -160,7 +204,7 @@
     const values = {
       '#intelRecentTokens': compact(summary.quality_wallets || 0),
       '#intelEligibleTokens': compact(summary.monitored_wallets || 0),
-      '#intelOpportunities': compact(summary.purchase_alerts_24h || 0),
+      '#intelOpportunities': compact(summary.opportunities || 0),
       '#intelQualityWallets': money(summary.realized_pnl_usd || 0),
       '#intelRejectedTokens': compact(summary.pending_alert_delivery || 0),
     };
@@ -186,6 +230,7 @@
         : errors.length
           ? `<span class="solana-error">Atualização parcial: ${escapeHTML(errors[0].provider)} · ${escapeHTML(errors[0].message)}</span>`
           : '';
+    renderOpportunities(data.opportunities, birdeyeConfigured);
     renderWallets(data.wallets, birdeyeConfigured);
     renderPurchases(data.purchases, heliusConfigured);
     const generated = document.querySelector('#solanaGeneratedAt');

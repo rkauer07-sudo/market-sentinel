@@ -29,6 +29,9 @@ analysis:
   zone_tolerance_atr: 0.35
   retest_min_bars: 2
   retest_max_bars: 3
+  enable_pullback_continuation: true
+  pullback_zone_atr: 0.6
+  pullback_lookback: 3
   alert_cooldown_hours: 12
 runtime:
   scan_interval_seconds: 60

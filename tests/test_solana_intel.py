@@ -538,3 +538,81 @@ def test_solana_intel_web_endpoints(tmp_path, monkeypatch):
         assert received_webhooks == [{"type": "SWAP"}]
         assert client.get("/static/solana-intel.js").status_code == 200
         assert client.get("/static/solana-intel.css").status_code == 200
+
+
+def _observation(mint: str, *, wallet: str, realized: float, delay: int | None = 90,
+                 tags: list[str] | None = None) -> dict:
+    return {
+        "wallet": wallet,
+        "mint": mint,
+        "symbol": mint[:4],
+        "first_trade_at": 1_767_225_600 + (delay or 0),
+        "entry_delay_seconds": delay,
+        "realized_pnl_usd": realized,
+        "unrealized_pnl_usd": 0.0,
+        "total_pnl_usd": realized,
+        "volume_usd": 10_000.0,
+        "buy_trades": 3,
+        "sell_trades": 2,
+        "tags": tags or ["smart_trader"],
+        "token_liquidity_usd": 45_000.0,
+    }
+
+
+def _service() -> SolanaIntelService:
+    return SolanaIntelService(httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[]))
+    ))
+
+
+def test_strong_track_record_qualifies_with_a_single_cohort_mint(monkeypatch):
+    """A proven 90-day wallet must not be starved just because a single small
+    launch batch only exposes one of its profitable mints."""
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    service = _service()
+    summary = {"data": {
+        "counts": {"total_buy": 90, "total_sell": 60, "total_win": 22,
+                   "total_loss": 8, "win_rate": 22 / 30},
+        "pnl": {"realized_profit_usd": 18_000, "unrealized_usd": 0,
+                "total_usd": 18_000, "avg_profit_per_trade_usd": 250},
+    }}
+    observations = [_observation(MINT_A, wallet=WALLET, realized=1_500)]
+    profile = service._wallet_profile(WALLET, summary, observations)
+
+    assert profile["profitable_memecoins"] == 1
+    # Old rule (>=3 distinct mints) would have rejected this wallet.
+    assert profile["qualified"] is True
+    assert profile["qualification_basis"] == "track_record"
+
+
+def test_weak_wallet_with_single_mint_stays_out(monkeypatch):
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    service = _service()
+    summary = {"data": {
+        "counts": {"total_buy": 6, "total_sell": 3, "total_win": 2,
+                   "total_loss": 3, "win_rate": 2 / 5},
+        "pnl": {"realized_profit_usd": 120, "unrealized_usd": 0,
+                "total_usd": 120, "avg_profit_per_trade_usd": 10},
+    }}
+    observations = [_observation(MINT_A, wallet=WALLET, realized=120)]
+    profile = service._wallet_profile(WALLET, summary, observations)
+
+    assert profile["profitable_memecoins"] == 1
+    assert profile["qualified"] is False
+    assert profile["qualification_basis"] == "none"
+
+
+def test_disqualifying_tag_beats_a_strong_track_record(monkeypatch):
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    service = _service()
+    summary = {"data": {
+        "counts": {"total_buy": 90, "total_sell": 60, "total_win": 22,
+                   "total_loss": 8, "win_rate": 22 / 30},
+        "pnl": {"realized_profit_usd": 50_000, "unrealized_usd": 0,
+                "total_usd": 50_000, "avg_profit_per_trade_usd": 500},
+    }}
+    observations = [_observation(MINT_A, wallet=WALLET, realized=9_000,
+                                 tags=["smart_trader", "bundler"])]
+    profile = service._wallet_profile(WALLET, summary, observations)
+
+    assert profile["qualified"] is False

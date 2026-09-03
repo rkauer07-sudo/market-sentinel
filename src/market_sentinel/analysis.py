@@ -82,6 +82,50 @@ def confirmed_breakout_retest(candles: list[Candle], levels: list[float], direct
     return max(matches, key=lambda item: item[0])[1] if matches else None
 
 
+def pullback_continuation(closed: list[Candle], ma20: float, ma50: float,
+                          current_atr: float, trend_up: bool, trend_down: bool,
+                          cfg: dict) -> tuple[str, float, float] | None:
+    """Trend-continuation entry.
+
+    An already-aligned trend (20/50/200) pulls back into the MA20 zone over the
+    last few closed candles and the last closed candle reclaims MA20 in the trend
+    direction with a decisive body. This is a second high-quality setup family
+    beyond the breakout-and-retest: it still requires full trend alignment and,
+    downstream, the same volume/vibe/regime gates, so precision is preserved
+    while far more real opportunities are surfaced. Returns (direction, entry,
+    stop) or None.
+    """
+    if len(closed) < 4 or not (trend_up or trend_down):
+        return None
+    zone = current_atr * float(cfg.get("pullback_zone_atr", .6))
+    lookback = max(1, int(cfg.get("pullback_lookback", 3)))
+    recent = closed[-lookback - 1:-1] or [closed[-2]]
+    confirmation = closed[-1]
+    candle_range = max(confirmation.high - confirmation.low, 1e-12)
+    body_ratio = abs(confirmation.close - confirmation.open) / candle_range
+    if trend_up:
+        pull_low = min(candle.low for candle in recent)
+        touched = pull_low <= ma20 + zone
+        reclaimed = (confirmation.close > confirmation.open and confirmation.close > ma20
+                     and body_ratio >= .35
+                     and confirmation.close >= confirmation.low + .6 * candle_range)
+        if touched and reclaimed:
+            stop = min(pull_low, ma50) - .25 * current_atr
+            if confirmation.close - stop > 0:
+                return "LONG", confirmation.close, stop
+    if trend_down:
+        pull_high = max(candle.high for candle in recent)
+        touched = pull_high >= ma20 - zone
+        rejected = (confirmation.close < confirmation.open and confirmation.close < ma20
+                    and body_ratio >= .35
+                    and confirmation.close <= confirmation.high - .6 * candle_range)
+        if touched and rejected:
+            stop = max(pull_high, ma50) + .25 * current_atr
+            if stop - confirmation.close > 0:
+                return "SHORT", confirmation.close, stop
+    return None
+
+
 def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: bool | None,
             cfg: dict, diagnostics: dict | None = None) -> Opportunity | None:
     def reject(reason: str):
@@ -119,7 +163,13 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     elif short_retest is not None:
         setup, direction, entry, stop = "perda + reteste confirmado", "SHORT", last.close, short_retest + current_atr
     else:
-        return reject("no_confirmed_setup")
+        pullback = (pullback_continuation(closed, ma20, ma50, current_atr, trend_up, trend_down, cfg)
+                    if bool(cfg.get("enable_pullback_continuation", True)) else None)
+        if pullback is None:
+            return reject("no_confirmed_setup")
+        direction, entry, stop = pullback
+        setup = ("pullback de continuação (alta)" if direction == "LONG"
+                 else "pullback de continuação (baixa)")
     risk = abs(entry - stop)
     if risk <= 0: return reject("invalid_risk")
     vibe = technical_snapshot(closes)
