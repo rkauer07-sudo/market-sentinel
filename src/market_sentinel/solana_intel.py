@@ -128,6 +128,30 @@ class SolanaIntelService:
         self.max_concurrency = max(
             1, min(10, _integer(os.getenv("SOLANA_INTEL_MAX_CONCURRENCY"), 4))
         )
+        # Birdeye rate-limit handling. Low-tier keys throttle aggressively (HTTP
+        # 429) once several launches are eligible, so space the calls and retry
+        # with backoff instead of failing the cycle. Bound how much Birdeye work a
+        # single cycle does so a serverless read never exceeds its time budget;
+        # remaining tokens stay "due" and are picked up next cycle. Coverage
+        # accumulates in the persistent history.
+        self.birdeye_min_interval = max(
+            0.0, _number(os.getenv("SOLANA_INTEL_BIRDEYE_MIN_INTERVAL_SECONDS"), 1.2)
+        )
+        self.birdeye_max_retries = max(
+            0, min(8, _integer(os.getenv("SOLANA_INTEL_BIRDEYE_MAX_RETRIES"), 4))
+        )
+        self.analysis_batch = max(
+            1, min(50, _integer(os.getenv("SOLANA_INTEL_ANALYSIS_BATCH"), 8))
+        )
+        self.wallet_audit_batch = max(
+            1, min(50, _integer(os.getenv("SOLANA_INTEL_WALLET_AUDIT_BATCH"), 12))
+        )
+        # When false the read path serves the accumulated Supabase history without
+        # making any live Birdeye calls. Set it on the serverless web deployment
+        # and let the always-on worker do the enrichment.
+        self.enrich_on_read = os.getenv(
+            "SOLANA_INTEL_ENRICH_ON_READ", "true"
+        ).strip().lower() not in ("0", "false", "no", "off")
         # The Jupiter "recent" cohort is seconds-to-minutes old: liquidity sits in
         # the low single-digit thousands and Jupiter's organic score is still 0.
         # Mature-token thresholds (25k liquidity, organic >= 30) reject 100% of it,
@@ -198,6 +222,8 @@ class SolanaIntelService:
         self._cache: dict | None = None
         self._cache_at = 0.0
         self._lock = asyncio.Lock()
+        self._birdeye_lock = asyncio.Lock()
+        self._birdeye_last = 0.0
 
     def _jupiter_headers(self) -> dict[str, str]:
         return {"x-api-key": self.jupiter_api_key} if self.jupiter_api_key else {}
@@ -347,6 +373,43 @@ class SolanaIntelService:
         except ValueError as exc:
             raise UpstreamError("Resposta JSON inválida") from exc
 
+    async def _birdeye_get(self, url: str, *, params: dict[str, Any] | None = None) -> Any:
+        """Rate-limited Birdeye GET.
+
+        Serializes calls with a minimum interval and retries HTTP 429 with
+        exponential backoff, honouring a Retry-After header when present. This
+        keeps low-tier keys under their limit instead of failing the cycle.
+        """
+        headers = {"X-API-KEY": self.birdeye_api_key, "x-chain": "solana"}
+        attempt = 0
+        while True:
+            async with self._birdeye_lock:
+                if self.birdeye_min_interval:
+                    wait = self.birdeye_min_interval - (
+                        time.monotonic() - self._birdeye_last
+                    )
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                response = await self.client.get(url, params=params, headers=headers)
+                self._birdeye_last = time.monotonic()
+            if response.status_code == 429 and attempt < self.birdeye_max_retries:
+                retry_after = _number(response.headers.get("Retry-After"), 0)
+                backoff = retry_after if retry_after > 0 else min(
+                    30.0, (self.birdeye_min_interval or 1.0) * (2 ** attempt)
+                )
+                await asyncio.sleep(backoff)
+                attempt += 1
+                continue
+            if response.status_code >= 400:
+                body = response.text[:240].strip()
+                raise UpstreamError(
+                    f"HTTP {response.status_code}: {body or 'resposta sem detalhes'}"
+                )
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise UpstreamError("Resposta JSON inválida") from exc
+
     async def _recent_tokens(self) -> list[dict]:
         payload = await self._get_json(
             f"{self.jupiter_base}/tokens/v2/recent", headers=self._jupiter_headers()
@@ -418,7 +481,7 @@ class SolanaIntelService:
         }
 
     async def _top_traders(self, token: dict) -> list[dict]:
-        payload = await self._get_json(
+        payload = await self._birdeye_get(
             f"{self.birdeye_base}/defi/v2/tokens/top_traders",
             params={
                 "address": token["mint"],
@@ -429,7 +492,6 @@ class SolanaIntelService:
                 "limit": 10,
                 "wallet_tags": "sniper,smart_trader",
             },
-            headers={"X-API-KEY": self.birdeye_api_key, "x-chain": "solana"},
         )
         data = payload.get("data", payload) if isinstance(payload, dict) else {}
         if isinstance(data, list):
@@ -441,7 +503,7 @@ class SolanaIntelService:
         return []
 
     async def _wallet_pnl_summary(self, wallet: str) -> dict:
-        payload = await self._get_json(
+        payload = await self._birdeye_get(
             f"{self.birdeye_base}/wallet/v2/pnl/summary",
             params={
                 "wallet": wallet,
@@ -449,7 +511,6 @@ class SolanaIntelService:
                 "position_scope": "cumulative",
                 "pnl_method": "wac",
             },
-            headers={"X-API-KEY": self.birdeye_api_key, "x-chain": "solana"},
         )
         data = payload.get("data", payload) if isinstance(payload, dict) else {}
         return data if isinstance(data, dict) else {}
@@ -1389,14 +1450,16 @@ class SolanaIntelService:
 
             self._merge_launch_history(recent_tokens, generated_at)
             tokens = self._history_tokens()
-            analysis_tokens = self._tokens_due_for_analysis(generated_at)
+            analysis_tokens = self._tokens_due_for_analysis(generated_at)[
+                : self.analysis_batch
+            ]
             observations: list[dict] = []
             enriched_tokens = 0
             wallet_profiles: list[dict] = []
             wallet_candidates: list[str] = []
             successfully_enriched: set[str] = set()
             failed_wallets: set[str] = set()
-            if self.birdeye_api_key and analysis_tokens:
+            if self.enrich_on_read and self.birdeye_api_key and analysis_tokens:
                 semaphore = asyncio.Semaphore(self.max_concurrency)
 
                 async def enrich(token: dict):
@@ -1438,6 +1501,9 @@ class SolanaIntelService:
                         wallet_profiles.append(profile)
                     else:
                         wallets_to_audit.append(wallet)
+                # Bound audits per cycle so a single rate-limited run stays within
+                # its time budget; the rest are audited on a later cycle.
+                wallets_to_audit = wallets_to_audit[: self.wallet_audit_batch]
 
                 async def audit_wallet(wallet: str):
                     async with semaphore:
@@ -1621,6 +1687,10 @@ class SolanaIntelService:
                     "token_batch_per_cycle": self.max_tokens,
                     "wallets_per_cycle": self.max_wallets,
                     "max_concurrency": self.max_concurrency,
+                    "enrich_on_read": self.enrich_on_read,
+                    "analysis_batch": self.analysis_batch,
+                    "wallet_audit_batch": self.wallet_audit_batch,
+                    "birdeye_min_interval_seconds": self.birdeye_min_interval,
                     "reanalyze_seconds": self.reanalyze_seconds,
                     "history_persistent": self.history_persistent,
                     "ranking": (

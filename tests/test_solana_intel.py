@@ -655,3 +655,63 @@ def test_organic_reject_is_opt_in(monkeypatch):
     monkeypatch.setenv("SOLANA_INTEL_MIN_ORGANIC_SCORE", "30")
     service = _service()
     assert "low_organic_activity" in service._structural_rejections(_fresh_token())
+
+
+async def test_birdeye_get_retries_on_429(monkeypatch):
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    monkeypatch.setenv("SOLANA_INTEL_BIRDEYE_MIN_INTERVAL_SECONDS", "0")
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(429, json={"success": False, "message": "Too many requests"})
+        return httpx.Response(200, json={"data": {"ok": True}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = SolanaIntelService(client)
+        payload = await service._birdeye_get("https://birdeye.test/x")
+
+    assert calls["n"] == 3           # two 429s, then success
+    assert payload == {"data": {"ok": True}}
+
+
+async def test_birdeye_get_gives_up_after_max_retries(monkeypatch):
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    monkeypatch.setenv("SOLANA_INTEL_BIRDEYE_MIN_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("SOLANA_INTEL_BIRDEYE_MAX_RETRIES", "2")
+
+    def handler(request: httpx.Request):
+        return httpx.Response(429, json={"success": False, "message": "Too many requests"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = SolanaIntelService(client)
+        raised = False
+        try:
+            await service._birdeye_get("https://birdeye.test/x")
+        except Exception as exc:  # UpstreamError
+            raised = True
+            assert "429" in str(exc)
+    assert raised
+
+
+async def test_read_only_mode_skips_enrichment(monkeypatch):
+    monkeypatch.setenv("BIRDEYE_API_KEY", "birdeye-test")
+    monkeypatch.setenv("SOLANA_INTEL_ENRICH_ON_READ", "false")
+    monkeypatch.setenv("SOLANA_INTEL_MAX_TOKENS", "3")
+    hits = {"birdeye": 0}
+
+    def handler(request: httpx.Request):
+        if request.url.path == "/tokens/v2/recent":
+            return httpx.Response(200, json=[
+                token(MINT_A, "A", "2026-01-01T00:00:00Z"),
+            ])
+        hits["birdeye"] += 1
+        return httpx.Response(200, json={"data": {}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        snapshot = await SolanaIntelService(client).snapshot(force=True)
+
+    assert hits["birdeye"] == 0                       # no live Birdeye calls
+    assert snapshot["summary"]["enriched_tokens"] == 0
+    assert snapshot["methodology"]["enrich_on_read"] is False

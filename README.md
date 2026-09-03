@@ -158,6 +158,8 @@ também em **GitHub → Settings → Secrets and variables → Actions**. Sem a 
 Birdeye, o worker ainda coleta e deduplica lançamentos, mas deixa a análise das
 carteiras pendente.
 
+**Divisão recomendada web x worker (evita o rate limit 429 da Birdeye):** a Vercel é serverless e tem timeout curto, então configure `SOLANA_INTEL_ENRICH_ON_READ=false` no Vercel — assim a página apenas lê o histórico já enriquecido no Supabase, sem chamar a Birdeye no request. Deixe o **worker do GitHub Actions** fazer o enriquecimento (com `BIRDEYE_API_KEY` nos Secrets do Actions), que roda sem timeout. As chamadas à Birdeye são espaçadas por `SOLANA_INTEL_BIRDEYE_MIN_INTERVAL_SECONDS` e reenviadas em caso de 429; cada ciclo processa no máximo `SOLANA_INTEL_ANALYSIS_BATCH` tokens e `SOLANA_INTEL_WALLET_AUDIT_BATCH` carteiras, e a cobertura vai se acumulando no Supabase entre os ciclos.
+
 Para produção na Vercel, abra **Project Settings > Environment Variables**, crie
 `BIRDEYE_API_KEY` (obrigatória para o ranking completo) e, de preferência,
 `JUPITER_API_KEY`. Marque os ambientes Production e Preview e faça um redeploy.
