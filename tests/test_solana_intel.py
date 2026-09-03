@@ -616,3 +616,42 @@ def test_disqualifying_tag_beats_a_strong_track_record(monkeypatch):
     profile = service._wallet_profile(WALLET, summary, observations)
 
     assert profile["qualified"] is False
+
+
+def _fresh_token(**overrides) -> dict:
+    """A token shaped like the Jupiter 'recent' cohort: authorities renounced,
+    a few thousand USD of liquidity, organic score still 0."""
+    base = {
+        "mint": MINT_A, "name": "Fresh", "symbol": "FRSH",
+        "mint_authority_disabled": True, "freeze_authority_disabled": True,
+        "liquidity_usd": 3_000.0, "top_holders_pct": None,
+        "organic_score": 0.0, "safety_score": 65,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_fresh_cohort_token_is_structurally_eligible_by_default(monkeypatch):
+    service = _service()
+    # Organic 0 and low-thousands liquidity must NOT reject a renounced token.
+    assert service._structural_rejections(_fresh_token()) == []
+
+
+def test_active_authority_still_rejects(monkeypatch):
+    service = _service()
+    assert "mint_authority_active" in service._structural_rejections(
+        _fresh_token(mint_authority_disabled=False))
+    assert "freeze_authority_active" in service._structural_rejections(
+        _fresh_token(freeze_authority_disabled=False))
+
+
+def test_dust_liquidity_still_rejects(monkeypatch):
+    service = _service()
+    assert "thin_liquidity" in service._structural_rejections(
+        _fresh_token(liquidity_usd=100.0))
+
+
+def test_organic_reject_is_opt_in(monkeypatch):
+    monkeypatch.setenv("SOLANA_INTEL_MIN_ORGANIC_SCORE", "30")
+    service = _service()
+    assert "low_organic_activity" in service._structural_rejections(_fresh_token())

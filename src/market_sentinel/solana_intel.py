@@ -128,11 +128,23 @@ class SolanaIntelService:
         self.max_concurrency = max(
             1, min(10, _integer(os.getenv("SOLANA_INTEL_MAX_CONCURRENCY"), 4))
         )
+        # The Jupiter "recent" cohort is seconds-to-minutes old: liquidity sits in
+        # the low single-digit thousands and Jupiter's organic score is still 0.
+        # Mature-token thresholds (25k liquidity, organic >= 30) reject 100% of it,
+        # so the structural filter never lets anything reach wallet analysis. Keep
+        # the anti-rug gates (mint/freeze authority renounced) hard, but calibrate
+        # liquidity and organic to the real source and let wallet quality be the
+        # decisive filter.
         self.min_liquidity_usd = max(
-            5_000, _number(os.getenv("SOLANA_INTEL_MIN_LIQUIDITY_USD"), 25_000)
+            250, _number(os.getenv("SOLANA_INTEL_MIN_LIQUIDITY_USD"), 2_000)
         )
         self.min_token_safety = max(
-            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_TOKEN_SAFETY"), 65))
+            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_TOKEN_SAFETY"), 60))
+        )
+        # Organic score is informational for fresh launches (usually 0). Default
+        # off as a structural reject; it still feeds the safety score.
+        self.min_organic_score = max(
+            0, min(100, _number(os.getenv("SOLANA_INTEL_MIN_ORGANIC_SCORE"), 0))
         )
         self.min_profitable_memecoins = max(
             1, min(20, _integer(
@@ -140,7 +152,7 @@ class SolanaIntelService:
             ))
         )
         self.min_opportunity_score = max(
-            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_OPPORTUNITY_SCORE"), 58))
+            0, min(100, _integer(os.getenv("SOLANA_INTEL_MIN_OPPORTUNITY_SCORE"), 50))
         )
         # Alternative wallet-qualification path. The primary rule demands several
         # distinct profitable cohort mints, which is rare inside a single small
@@ -482,7 +494,7 @@ class SolanaIntelService:
             reasons.append("thin_liquidity")
         if token["top_holders_pct"] is not None and token["top_holders_pct"] >= 20:
             reasons.append("high_holder_concentration")
-        if token["organic_score"] < 30:
+        if self.min_organic_score and token["organic_score"] < self.min_organic_score:
             reasons.append("low_organic_activity")
         if token["safety_score"] < self.min_token_safety:
             reasons.append("low_safety_score")
@@ -1628,6 +1640,7 @@ class SolanaIntelService:
                     "minimums": {
                         "liquidity_usd": self.min_liquidity_usd,
                         "token_safety": self.min_token_safety,
+                        "organic_score": self.min_organic_score,
                         "opportunity_score": self.min_opportunity_score,
                         "profitable_memecoins": self.min_profitable_memecoins,
                         "pnl_qualifying_usd": self.min_pnl_qualifying_usd,
