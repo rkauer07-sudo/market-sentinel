@@ -1038,9 +1038,21 @@ class SolanaIntelService:
                 record["rejection_reasons"] = structural_rejections
                 continue
             if not analyzed_at or now - analyzed_at >= self.reanalyze_seconds:
-                due.append((not bool(analyzed_at), analyzed_at, record))
+                due.append((not bool(analyzed_at), analyzed_at, record, token))
+        # Prioritise where the players actually are. Brand-new launches rarely
+        # have profitable top traders yet, so favour tokens with real trading
+        # activity (traders, holders, buy volume) over pure recency. Never-analyzed
+        # tokens still go first; within each group the busiest are analyzed first.
+        def activity(token: dict) -> float:
+            return (
+                _number(token.get("traders_5m")) * 3
+                + _number(token.get("net_buyers_5m")) * 2
+                + _number(token.get("holder_count"))
+                + _number(token.get("buy_volume_5m")) / 500
+            )
         due.sort(key=lambda item: (
-            -int(item[0]), item[1], -_integer(item[2].get("discovered_at")),
+            -int(item[0]), -activity(item[3]), item[1],
+            -_integer(item[2].get("discovered_at")),
         ))
         return [item[2]["token"] for item in due[: self.max_tokens]]
 

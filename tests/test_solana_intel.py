@@ -730,3 +730,19 @@ async def test_wallet_tag_filter_is_opt_in(monkeypatch):
         await SolanaIntelService(client)._top_traders({"mint": MINT_A})
 
     assert seen["query"]["wallet_tags"] == ["smart_trader"]
+
+
+def test_analysis_prioritizes_active_tokens_over_pure_recency(monkeypatch):
+    service = _service()
+    quiet = _fresh_token(mint=MINT_A)
+    quiet.update({"traders_5m": 1, "holder_count": 5, "net_buyers_5m": 0, "buy_volume_5m": 10})
+    busy = _fresh_token(mint=MINT_B)
+    busy.update({"traders_5m": 40, "holder_count": 300, "net_buyers_5m": 20, "buy_volume_5m": 5000})
+    # The quiet token is newer (higher discovered_at) but should rank behind the
+    # busy one because activity now leads the ordering.
+    service._history_state["tokens"] = {
+        MINT_A: {"token": quiet, "discovered_at": 2000, "analyzed_at": 0},
+        MINT_B: {"token": busy, "discovered_at": 1000, "analyzed_at": 0},
+    }
+    ordered = service._tokens_due_for_analysis(10_000)
+    assert [t["mint"] for t in ordered] == [MINT_B, MINT_A]
