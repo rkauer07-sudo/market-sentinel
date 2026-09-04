@@ -520,7 +520,10 @@ class SolanaIntelService:
             params={
                 "wallet": wallet,
                 "duration": "90d",
-                "position_scope": "cumulative",
+                # Birdeye rejects position_scope=cumulative together with
+                # pnl_method=wac ("wac only supports duration_only"); duration_only
+                # also matches the 90d window we qualify on.
+                "position_scope": "duration_only",
                 "pnl_method": "wac",
             },
         )

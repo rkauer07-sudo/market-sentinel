@@ -191,7 +191,7 @@ async def test_only_tokens_backed_by_quality_wallet_history_become_opportunities
             api_calls["wallet_summary"] += 1
             assert query["wallet"] == [WALLET]
             assert query["duration"] == ["90d"]
-            assert query["position_scope"] == ["cumulative"]
+            assert query["position_scope"] == ["duration_only"]
             assert query["pnl_method"] == ["wac"]
             return httpx.Response(200, json={"data": {
                 "counts": {
