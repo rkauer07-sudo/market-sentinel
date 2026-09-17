@@ -1,0 +1,276 @@
+<title>Market Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --felt:#0f4a2a; --felt-2:#0a3a20; --felt-edge:#083018;
+  --paper:#f3ecd7; --paper-2:#ece0c4; --paper-line:#d9c9a4;
+  --ink:#1d2a20; --ink-soft:#5f6b58; --gold:#c8a24a; --gold-2:#e6c46a;
+  --pos:#2f8f4e; --neg:#c23a2f; --focus:#d98a2b;
+  /* faixas de propriedade */
+  --p-brown:#8a5a34; --p-sky:#54a6d8; --p-pink:#c9508f; --p-orange:#e08a2e;
+  --p-red:#c1272d; --p-yellow:#e9be36; --p-green:#2f8f4e; --p-blue:#245ca8;
+  --shadow:0 10px 24px rgba(0,0,0,.28);
+}
+*{box-sizing:border-box}
+body{margin:0;background:
+  radial-gradient(circle at 80% -10%, #14663a 0, transparent 42%),
+  radial-gradient(circle at 0% 110%, #0c4626 0, transparent 46%),
+  var(--felt);
+  color:var(--ink);font-family:Manrope,system-ui,sans-serif;min-height:100vh}
+.wrap{max-width:1200px;margin:auto;padding-block:22px;padding-left:16px;padding-right:16px}
+
+/* ====== MOLDURA DO TABULEIRO ====== */
+.board{
+  background:var(--paper);
+  border:3px solid var(--ink);
+  border-radius:22px;
+  box-shadow:var(--shadow), inset 0 0 0 10px var(--paper), inset 0 0 0 12px var(--paper-line);
+  padding:18px;position:relative;overflow:hidden;
+}
+.board:before{content:"";position:absolute;inset:14px;border:2px solid var(--paper-line);border-radius:12px;pointer-events:none}
+.corner{position:absolute;width:30px;height:30px;border:3px solid var(--ink);z-index:2}
+.corner.tl{top:8px;left:8px;border-right:0;border-bottom:0;border-radius:14px 0 0 0}
+.corner.tr{top:8px;right:8px;border-left:0;border-bottom:0;border-radius:0 14px 0 0}
+.corner.bl{bottom:8px;left:8px;border-right:0;border-top:0;border-radius:0 0 0 14px}
+.corner.br{bottom:8px;right:8px;border-left:0;border-top:0;border-radius:0 0 14px 0}
+
+/* ====== TOPO ====== */
+.top{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  border-bottom:2px dashed var(--paper-line);padding-bottom:16px;position:relative;z-index:1}
+.brand{display:flex;align-items:center;gap:13px}
+.token{width:40px;height:40px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--gold-2),var(--gold));
+  border:2px solid var(--ink);display:grid;place-items:center;color:var(--ink);font:700 20px Oswald;box-shadow:inset 0 -3px 6px rgba(0,0,0,.25)}
+.brand h1{font:700 22px/1 Oswald;letter-spacing:.06em;text-transform:uppercase;margin:0}
+.brand .sub{font:500 10px DM Mono;color:var(--ink-soft);letter-spacing:.14em;margin-top:4px}
+.top-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pill-select{appearance:none;font:600 11px Oswald;letter-spacing:.06em;text-transform:uppercase;
+  background:var(--paper-2);color:var(--ink);border:2px solid var(--ink);border-radius:999px;padding:9px 30px 9px 14px;cursor:pointer;
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink) 50%),linear-gradient(135deg,var(--ink) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 15px,calc(100% - 11px) 15px;background-size:4px 4px;background-repeat:no-repeat}
+.wallet{font:600 11px Oswald;letter-spacing:.06em;text-transform:uppercase;background:var(--gold);color:var(--ink);
+  border:2px solid var(--ink);border-radius:999px;padding:10px 16px;cursor:pointer;box-shadow:var(--shadow)}
+.live{display:flex;align-items:center;gap:7px;font:600 10px DM Mono;letter-spacing:.1em;color:var(--pos)}
+.live .dot{width:9px;height:9px;border-radius:50%;background:var(--pos);box-shadow:0 0 12px var(--pos);animation:pulse 1.8s infinite}
+@keyframes pulse{50%{opacity:.4}}
+
+/* ====== HERO ====== */
+.hero{padding:24px 4px 10px;position:relative;z-index:1}
+.eyebrow{font:600 11px Oswald;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);}
+.headline{font:700 clamp(30px,5vw,52px)/.98 Oswald;letter-spacing:.01em;text-transform:uppercase;margin:8px 0 0;text-wrap:balance}
+.headline em{font-style:normal;color:var(--p-red)}
+.hero p{max-width:60ch;color:var(--ink-soft);font-size:13.5px;line-height:1.6;margin:12px 0 0}
+
+/* ====== TILES (casas de propriedade) ====== */
+.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:22px;position:relative;z-index:1}
+.tile{background:var(--paper-2);border:2px solid var(--ink);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)}
+.tile .band{height:12px;border-bottom:2px solid var(--ink)}
+.tile .body{padding:12px 12px 14px}
+.tile .label{font:600 9px Oswald;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+.tile .value{font:500 26px DM Mono;margin-top:6px;font-variant-numeric:tabular-nums}
+.tile .value.sm{font-size:15px;margin-top:11px}
+
+/* ====== SEÇÕES ====== */
+.section{margin-top:22px;position:relative;z-index:1}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.section-head h2{font:600 15px Oswald;letter-spacing:.1em;text-transform:uppercase;margin:0}
+.tag{font:600 10px DM Mono;letter-spacing:.06em;color:var(--ink);background:var(--gold-2);border:2px solid var(--ink);border-radius:999px;padding:4px 10px}
+.tag.muted{background:var(--paper-2);color:var(--ink-soft)}
+
+.filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.filters .pill-select{font-size:10px;padding:7px 26px 7px 11px;background-position:calc(100% - 13px) 13px,calc(100% - 9px) 13px}
+
+/* ====== CARTAS (título de propriedade) ====== */
+.deck{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.card{background:#fbf6ea;border:2px solid var(--ink);border-radius:12px;overflow:hidden;box-shadow:var(--shadow);
+  display:flex;flex-direction:column;transition:transform .16s}
+.card:hover{transform:translateY(-3px)}
+.card .titlebar{border-bottom:2px solid var(--ink);padding:9px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.card .titlebar .name{font:700 13px Oswald;letter-spacing:.12em;text-transform:uppercase;color:#fff}
+.card .titlebar .venue{font:600 9px DM Mono;color:#fff;opacity:.9}
+.card .cbody{padding:14px}
+.card .row1{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.ticker{font:500 22px DM Mono;letter-spacing:-.02em}
+.chip{font:600 9px Oswald;letter-spacing:.08em;text-transform:uppercase;border:2px solid var(--ink);border-radius:999px;padding:3px 9px}
+.chip.long{background:var(--pos);color:#fff}.chip.short{background:var(--neg);color:#fff}
+.score{text-align:right;font:500 26px DM Mono;color:var(--pos);line-height:1}
+.score small{display:block;font:600 8px Oswald;letter-spacing:.1em;color:var(--ink-soft)}
+.thesis{margin:12px 0 14px;font-size:12.5px;line-height:1.55;color:#39433a;min-height:40px}
+.levels{display:grid;grid-template-columns:repeat(3,1fr);border:2px solid var(--ink);border-radius:8px;overflow:hidden}
+.lvl{padding:9px 10px;border-right:2px solid var(--ink);background:var(--paper-2)}
+.lvl:last-child{border-right:0}
+.lvl span{display:block;font:600 8px Oswald;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+.lvl b{display:block;margin-top:4px;font:500 12px DM Mono}
+.lvl.stop b{color:var(--neg)}.lvl.target b{color:var(--pos)}
+.card .cfoot{margin-top:auto;border-top:2px dashed var(--paper-line);padding:10px 14px;display:flex;justify-content:space-between;
+  font:600 9px DM Mono;color:var(--ink-soft);letter-spacing:.04em}
+
+/* ====== CARTA "SORTE / REVÉS" (nota lateral) ====== */
+.aside-card{background:#fff8e8;border:2px solid var(--ink);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.aside-card .titlebar{background:var(--gold);border-bottom:2px solid var(--ink);padding:10px 14px;font:700 12px Oswald;letter-spacing:.14em;text-transform:uppercase;text-align:center}
+.aside-card .cbody{padding:14px;font:12px/1.6 DM Mono;color:#4a5147}
+.aside-card .cbody .line{padding:6px 0;border-bottom:1px dashed var(--paper-line)}
+.aside-card .cbody .line:last-child{border:0}
+.two-col{display:grid;grid-template-columns:1.6fr .8fr;gap:14px}
+
+/* ====== CICLO DE VIDA ====== */
+.life{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.stat{background:var(--paper-2);border:2px solid var(--ink);border-radius:10px;padding:14px;box-shadow:var(--shadow)}
+.stat .label{font:600 9px Oswald;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+.stat .n{font:500 24px DM Mono;margin-top:6px}
+.stat.win .n{color:var(--pos)}.stat.loss .n{color:var(--neg)}
+
+.footer{margin-top:22px;padding-top:14px;border-top:2px dashed var(--paper-line);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  font:600 9px DM Mono;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);position:relative;z-index:1}
+.note{margin:16px 2px 0;text-align:center;font:600 10px DM Mono;letter-spacing:.08em;color:#cddac9;text-transform:uppercase}
+
+@media(max-width:900px){.metrics{grid-template-columns:repeat(3,1fr)}.deck{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}.life{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.metrics{grid-template-columns:repeat(2,1fr)}.deck{grid-template-columns:1fr}.headline{font-size:30px}}
+</style>
+
+<div class="wrap">
+  <div class="board">
+    <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+
+    <header class="top">
+      <div class="brand">
+        <div class="token">MS</div>
+        <div><h1>Market Sentinel</h1><div class="sub">RADAR DE MERCADO · READ-ONLY</div></div>
+      </div>
+      <div class="top-actions">
+        <button class="wallet">Conectar carteira</button>
+        <select class="pill-select" aria-label="Idioma"><option>Português</option><option>English</option><option>Español</option></select>
+        <span class="live"><i class="dot"></i>AO VIVO</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow">◆ Vigilância automática 24/7</div>
+      <h1 class="headline">Vigilância de mercado,<br><em>sem ruído.</em></h1>
+      <p>Sinais em candles fechados: estrutura, médias 20/50/200, volume, ATR, RSI, MACD, liquidez e risco/retorno. O regime diário do BTC vale só para criptos. Nenhuma ordem é executada — tudo roda no piloto automático.</p>
+    </section>
+
+    <section class="metrics">
+      <div class="tile"><div class="band" style="background:var(--p-brown)"></div><div class="body"><div class="label">Mercados</div><div class="value">248</div></div></div>
+      <div class="tile"><div class="band" style="background:var(--p-sky)"></div><div class="body"><div class="label">Cripto</div><div class="value">61</div></div></div>
+      <div class="tile"><div class="band" style="background:var(--p-pink)"></div><div class="body"><div class="label">Commodities</div><div class="value">14</div></div></div>
+      <div class="tile"><div class="band" style="background:var(--p-orange)"></div><div class="body"><div class="label">Stocks EUA</div><div class="value">147</div></div></div>
+      <div class="tile"><div class="band" style="background:var(--p-blue)"></div><div class="body"><div class="label">Índices</div><div class="value">26</div></div></div>
+      <div class="tile"><div class="band" style="background:var(--p-green)"></div><div class="body"><div class="label">Telegram</div><div class="value sm">Conectado</div></div></div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Oportunidades qualificadas</h2><span class="tag">3 sinais</span></div>
+      <div class="filters">
+        <select class="pill-select"><option>Todas as plataformas</option></select>
+        <select class="pill-select"><option>Todos os tempos</option></select>
+        <select class="pill-select"><option>Long e short</option></select>
+      </div>
+      <div class="deck">
+
+        <article class="card">
+          <div class="titlebar" style="background:var(--p-orange)"><span class="name">Bitcoin</span><span class="venue">HYPERLIQUID</span></div>
+          <div class="cbody">
+            <div class="row1">
+              <div><div class="ticker">BTC-PERP</div><span class="chip long">Long · 4H</span></div>
+              <div class="score">88<small>/ 100</small></div>
+            </div>
+            <p class="thesis">Rompimento com reteste na SMA 50; volume 1,4× acima da média e RSI saindo de sobrevenda.</p>
+            <div class="levels">
+              <div class="lvl"><span>Entrada</span><b>63.420</b></div>
+              <div class="lvl stop"><span>Stop</span><b>61.900</b></div>
+              <div class="lvl target"><span>Alvo</span><b>67.800</b></div>
+            </div>
+          </div>
+          <div class="cfoot"><span>R:R 2,9</span><span>Aberto há 2h</span></div>
+        </article>
+
+        <article class="card">
+          <div class="titlebar" style="background:var(--p-blue)"><span class="name">Solana</span><span class="venue">BACKPACK</span></div>
+          <div class="cbody">
+            <div class="row1">
+              <div><div class="ticker">SOL-PERP</div><span class="chip long">Long · 1D</span></div>
+              <div class="score">84<small>/ 100</small></div>
+            </div>
+            <p class="thesis">Continuação de tendência após pullback à zona de suporte; MACD cruzando no diário.</p>
+            <div class="levels">
+              <div class="lvl"><span>Entrada</span><b>148,20</b></div>
+              <div class="lvl stop"><span>Stop</span><b>139,50</b></div>
+              <div class="lvl target"><span>Alvo</span><b>172,00</b></div>
+            </div>
+          </div>
+          <div class="cfoot"><span>R:R 2,7</span><span>Aberto há 5h</span></div>
+        </article>
+
+        <article class="card">
+          <div class="titlebar" style="background:var(--p-red)"><span class="name">Hype</span><span class="venue">HYPERLIQUID</span></div>
+          <div class="cbody">
+            <div class="row1">
+              <div><div class="ticker">HYPE-PERP</div><span class="chip short">Short · 4H</span></div>
+              <div class="score" style="color:var(--neg)">82<small>/ 100</small></div>
+            </div>
+            <p class="thesis">Rejeição na resistência com divergência de RSI; perda da SMA 20 confirma pressão vendedora.</p>
+            <div class="levels">
+              <div class="lvl"><span>Entrada</span><b>28,40</b></div>
+              <div class="lvl stop"><span>Stop</span><b>30,10</b></div>
+              <div class="lvl target"><span>Alvo</span><b>24,20</b></div>
+            </div>
+          </div>
+          <div class="cfoot"><span>R:R 2,5</span><span>Aberto há 1h</span></div>
+        </article>
+
+      </div>
+    </section>
+
+    <section class="section two-col">
+      <div>
+        <div class="section-head"><h2>Cenários em preparação</h2><span class="tag muted">2 podem acontecer</span></div>
+        <div class="deck" style="grid-template-columns:repeat(2,1fr)">
+          <article class="card">
+            <div class="titlebar" style="background:var(--p-yellow)"><span class="name" style="color:var(--ink)">Ethereum</span><span class="venue" style="color:var(--ink)">NADO</span></div>
+            <div class="cbody">
+              <div class="row1"><div><div class="ticker">ETH-PERP</div><span class="chip" style="background:var(--focus);color:#fff">Prontidão 72%</span></div></div>
+              <p class="thesis">Aproximando de rompimento da máxima semanal; aguarda fechamento acima de 3.480 com volume.</p>
+            </div>
+            <div class="cfoot"><span>Gatilho 3.480</span><span>Invalida 3.310</span></div>
+          </article>
+          <article class="card">
+            <div class="titlebar" style="background:var(--p-green)"><span class="name">Link</span><span class="venue">BACKPACK</span></div>
+            <div class="cbody">
+              <div class="row1"><div><div class="ticker">LINK-PERP</div><span class="chip" style="background:var(--focus);color:#fff">Prontidão 65%</span></div></div>
+              <p class="thesis">Formando fundo mais alto na zona de demanda; precisa recuperar a SMA 50 para acionar.</p>
+            </div>
+            <div class="cfoot"><span>Gatilho 18,90</span><span>Invalida 16,40</span></div>
+          </article>
+        </div>
+      </div>
+      <aside class="aside-card">
+        <div class="titlebar">Sorte / Revés</div>
+        <div class="cbody">
+          <div class="line">◆ Regime diário do BTC: <b>Altista</b></div>
+          <div class="line">◆ Última varredura: há 2 min</div>
+          <div class="line">◆ Aviso: prontidão é leitura técnica, não garantia de lucro.</div>
+          <div class="line">◆ Nenhuma ordem é executada pelo sistema.</div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Ciclo de vida das oportunidades</h2><span class="tag muted">Auditoria persistente</span></div>
+      <div class="life">
+        <div class="stat"><div class="label">Ativas</div><div class="n">7</div></div>
+        <div class="stat win"><div class="label">Concretizadas</div><div class="n">19</div></div>
+        <div class="stat loss"><div class="label">Falhas</div><div class="n">8</div></div>
+        <div class="stat"><div class="label">Taxa de acerto</div><div class="n">70%</div></div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>Hyperliquid · Backpack · Nado · Arcus</span>
+      <span>Informativo — não é recomendação financeira</span>
+    </footer>
+
+  </div>
+  <p class="note">Preview de design · dados de exemplo</p>
+</div>

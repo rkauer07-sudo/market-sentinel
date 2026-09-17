@@ -64,13 +64,197 @@
   @media(max-width:980px){.cards,.candidate-grid{grid-template-columns:1fr}}
   @media(max-width:720px){.hero{padding-top:24px}.cards{grid-template-columns:1fr;padding:8px}.op-main{padding:15px}.op-level{padding:10px}.op-foot{display:block;line-height:1.6}.watch-note{align-items:flex-start;flex-direction:column;gap:7px}.learning-status{white-space:normal}.candidate-grid{padding:8px}.candidate-guide{grid-template-columns:1fr}.logs{max-height:92px}.log-line{grid-template-columns:52px minmax(0,1fr)}.log-level{display:none}}
 </style>
+<style>
+/* ================= TEMA "MESA DE TABULEIRO" (override final) ================= */
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&display=swap');
+:root{
+  --b-felt:#0f4a2a; --b-paper:#f3ecd7; --b-paper2:#ece0c4; --b-card:#fbf6ea;
+  --b-line:#c9b790; --b-ink:#1d2a20; --b-soft:#5f6b58;
+  --b-gold:#c8a24a; --b-gold2:#e6c46a; --b-pos:#2f8f4e; --b-neg:#c23a2f; --b-focus:#d98a2b;
+  --b-brown:#8a5a34; --b-sky:#54a6d8; --b-pink:#c9508f; --b-orange:#e08a2e;
+  --b-red:#c1272d; --b-yellow:#e9be36; --b-green:#2f8f4e; --b-blue:#245ca8;
+}
+body{background:
+  radial-gradient(circle at 82% -8%, #14663a 0, transparent 42%),
+  radial-gradient(circle at 0% 108%, #0c4626 0, transparent 46%),
+  var(--b-felt) !important; color:var(--b-ink) !important; font-family:Manrope,system-ui,sans-serif}
+body:before{display:none !important}
+
+.shell{background:var(--b-paper) !important; color:var(--b-ink) !important;
+  border:3px solid var(--b-ink); border-radius:22px;
+  box-shadow:0 18px 50px rgba(0,0,0,.35), inset 0 0 0 10px var(--b-paper), inset 0 0 0 12px var(--b-line);
+  padding:20px 22px 26px !important;}
+@media(max-width:720px){.shell{border-radius:16px;padding:14px !important}}
+
+/* Nav lateral / mobile */
+.desktop-nav{background:var(--b-card) !important;border:3px solid var(--b-ink) !important;border-radius:18px !important;box-shadow:0 14px 40px rgba(0,0,0,.3) !important}
+.desktop-brand{border-bottom-color:var(--b-line) !important}
+.desktop-brand h2,.desktop-brand span{color:var(--b-ink) !important}
+.desktop-links a{color:var(--b-soft) !important;font-family:Oswald,sans-serif;text-transform:uppercase}
+.desktop-links a:hover,.desktop-links a:focus{background:var(--b-gold2) !important;color:var(--b-ink) !important}
+.desktop-help{border-top-color:var(--b-line) !important;color:var(--b-soft) !important}
+.desktop-help strong{color:var(--b-pos) !important}
+.mark{border-color:var(--b-gold) !important;background:transparent !important}.mark:after{background:var(--b-gold) !important}
+.mobile-nav{background:var(--b-card) !important;border:2px solid var(--b-ink) !important}
+.mobile-nav a{color:var(--b-soft) !important}.mobile-nav a:focus,.mobile-nav a:active{color:var(--b-ink) !important;background:var(--b-gold2) !important}
+
+/* Topo */
+.top{background:transparent !important;backdrop-filter:none !important;border:0 !important;border-bottom:2px dashed var(--b-line) !important}
+.top .brand{display:flex !important}
+h1,.brand h1{font-family:Oswald,sans-serif !important;color:var(--b-ink) !important}
+.sub{color:var(--b-soft) !important}
+.language-select{background-color:var(--b-paper2) !important;color:var(--b-ink) !important;border:2px solid var(--b-ink) !important;border-radius:999px !important;font-family:Oswald,sans-serif !important;
+  background-image:linear-gradient(45deg,transparent 50%,var(--b-ink) 50%),linear-gradient(135deg,var(--b-ink) 50%,transparent 50%) !important}
+.wallet-button{background:var(--b-gold) !important;color:var(--b-ink) !important;border:2px solid var(--b-ink) !important;border-radius:999px !important;font-family:Oswald,sans-serif !important}
+.wallet-button.connected{background:var(--b-card) !important}
+.live{color:var(--b-pos) !important}
+.dot{background:#9aa79a !important}.dot.on{background:var(--b-pos) !important;box-shadow:0 0 12px var(--b-pos) !important}
+
+/* Hero */
+.headline{font-family:Oswald,sans-serif !important;color:var(--b-ink) !important;text-transform:uppercase;letter-spacing:.01em}
+.headline em{color:var(--b-red) !important}
+.hero-note{background:var(--b-card) !important;color:var(--b-soft) !important;border:2px solid var(--b-line) !important;border-left:4px solid var(--b-gold) !important;border-radius:0 12px 12px 0 !important}
+
+/* Métricas = casas do tabuleiro */
+.metrics{background:transparent !important;border:0 !important;box-shadow:none !important;display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.metric{background:var(--b-paper2) !important;border:2px solid var(--b-ink) !important;border-top-width:12px !important;border-radius:10px !important;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+.metric:nth-child(1){border-top-color:var(--b-brown) !important}
+.metric:nth-child(2){border-top-color:var(--b-sky) !important}
+.metric:nth-child(3){border-top-color:var(--b-pink) !important}
+.metric:nth-child(4){border-top-color:var(--b-orange) !important}
+.metric:nth-child(5){border-top-color:var(--b-blue) !important}
+.metric:nth-child(6){border-top-color:var(--b-green) !important}
+.metric .label{color:var(--b-soft) !important;font-family:Oswald,sans-serif}
+.metric .value{color:var(--b-ink) !important}
+@media(max-width:900px){.metrics{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:560px){.metrics{grid-template-columns:repeat(2,1fr)}}
+
+/* Painéis */
+.panel{background:var(--b-card) !important;border:2px solid var(--b-ink) !important;border-radius:14px !important;box-shadow:0 12px 30px rgba(0,0,0,.2) !important;color:var(--b-ink) !important}
+.panel-head{background:var(--b-paper2) !important;backdrop-filter:none !important;border-bottom:2px solid var(--b-ink) !important}
+.panel-title{color:var(--b-ink) !important;font-family:Oswald,sans-serif}
+.count,.chat-status,.learning-status{color:var(--b-soft) !important}
+.empty{color:var(--b-soft) !important}
+
+/* Console / logs */
+.logs{background:var(--b-card) !important;color:var(--b-soft) !important}
+.log-time,.log-component{color:#8a8266 !important}
+.log-level{color:var(--b-ink) !important}
+.log-line.WARNING .log-level{color:var(--b-focus) !important}.log-line.ERROR .log-level{color:var(--b-neg) !important}
+.log-line+.log-line{border-top-color:var(--b-line) !important}
+
+/* Cartas de oportunidade */
+.op{background:var(--b-card) !important;border:2px solid var(--b-ink) !important;border-top-width:11px !important;border-radius:12px !important;box-shadow:0 12px 26px rgba(0,0,0,.2) !important}
+.op:nth-child(6n+1){border-top-color:var(--b-orange) !important}
+.op:nth-child(6n+2){border-top-color:var(--b-blue) !important}
+.op:nth-child(6n+3){border-top-color:var(--b-red) !important}
+.op:nth-child(6n+4){border-top-color:var(--b-green) !important}
+.op:nth-child(6n+5){border-top-color:var(--b-pink) !important}
+.op:nth-child(6n){border-top-color:var(--b-sky) !important}
+.op:hover{border-color:var(--b-ink) !important;transform:translateY(-3px)}
+.ticker{color:var(--b-ink) !important}
+.op-thesis{color:#39433a !important}
+.op-score{color:var(--b-pos) !important}.op-score small{color:var(--b-soft) !important}
+.venue-tag,.time-tag{color:var(--b-soft) !important;border-color:var(--b-line) !important;font-family:Oswald,sans-serif}
+.direction-chip{border:2px solid var(--b-ink) !important;font-family:Oswald,sans-serif}
+.direction-chip.long{background:var(--b-pos) !important;color:#fff !important}
+.direction-chip.short{background:var(--b-neg) !important;color:#fff !important}
+.learning-chip{color:var(--b-blue) !important;border-color:var(--b-sky) !important}
+.op-levels,.op-level{background:var(--b-paper2) !important;border-color:var(--b-ink) !important}
+.op-level span{color:var(--b-soft) !important;font-family:Oswald,sans-serif}
+.op-level b{color:var(--b-ink) !important}.op-level.stop b{color:var(--b-neg) !important}.op-level.target b{color:var(--b-pos) !important}
+.op-foot{background:var(--b-card) !important;border-top:2px dashed var(--b-line) !important;color:var(--b-soft) !important}
+.op-open{color:var(--b-pos) !important}
+.op .live-price{color:var(--b-ink) !important}
+
+/* Watchlist / cenários */
+.watchlist{border-color:var(--b-ink) !important}
+.watch-note{background:var(--b-paper2) !important;color:var(--b-soft) !important;border-bottom:2px solid var(--b-ink) !important}
+.candidate-filters{background:var(--b-paper2) !important;border-bottom:2px solid var(--b-ink) !important}
+.candidate-filters label{color:var(--b-soft) !important;font-family:Oswald,sans-serif}
+.venue-filter{background-color:var(--b-card) !important;color:var(--b-ink) !important;border:2px solid var(--b-ink) !important;border-radius:999px !important;font-family:Oswald,sans-serif !important;
+  background-image:linear-gradient(45deg,transparent 50%,var(--b-ink) 50%),linear-gradient(135deg,var(--b-ink) 50%,transparent 50%) !important}
+.candidate{background:var(--b-card) !important;border:2px solid var(--b-ink) !important;border-top-width:11px !important;border-radius:12px !important}
+.candidate:nth-child(4n+1){border-top-color:var(--b-yellow) !important}
+.candidate:nth-child(4n+2){border-top-color:var(--b-green) !important}
+.candidate:nth-child(4n+3){border-top-color:var(--b-pink) !important}
+.candidate:nth-child(4n){border-top-color:var(--b-sky) !important}
+.possible{background:transparent !important;color:var(--b-focus) !important;border:2px solid var(--b-focus) !important;font-family:Oswald,sans-serif}
+.readiness{color:var(--b-focus) !important}
+.readiness-track{background:var(--b-line) !important}.readiness-track i{background:var(--b-focus) !important}
+.candidate h3,.candidate-title-row .ticker{color:var(--b-ink) !important}
+.candidate p,.guide{color:#4a5147 !important}
+.simple-read{background:var(--b-paper2) !important;border:2px solid var(--b-line) !important}
+.simple-kicker{color:var(--b-pos) !important}.simple-read h3{color:var(--b-ink) !important}.simple-read p{color:#4a5147 !important}
+.candidate-levels,.candidate-level{border-color:var(--b-ink) !important}
+.candidate-level span{color:var(--b-soft) !important}.candidate-level b{color:var(--b-ink) !important}
+.candidate-level.risk b{color:var(--b-neg) !important}.candidate-level.reward b{color:var(--b-pos) !important}
+.guide b{color:var(--b-pos) !important}.guide.risk b{color:var(--b-neg) !important}
+.trigger-state{color:var(--b-soft) !important;border-left-color:var(--b-gold) !important;background:var(--b-paper2) !important}
+.trigger-state.touched{color:var(--b-focus) !important}
+.technical-details{border-top-color:var(--b-line) !important}
+.technical-details summary{color:var(--b-soft) !important;font-family:Oswald,sans-serif}
+.technical-details summary:after{color:var(--b-pos) !important}
+.context-title{color:var(--b-pos) !important}.context ul{color:#4a5147 !important}
+.stage{color:var(--b-focus) !important}
+
+/* Ciclo de vida */
+.life-summary{background:transparent !important;border:0 !important;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.life-stat{background:var(--b-paper2) !important;border:2px solid var(--b-ink) !important;border-radius:10px !important}
+.life-stat .label{color:var(--b-soft) !important;font-family:Oswald,sans-serif}
+.life-number{color:var(--b-ink) !important}
+.timeline .event{border-bottom-color:var(--b-line) !important}
+.event-time{color:var(--b-soft) !important}.event-symbol{color:var(--b-ink) !important}.event-message{color:#4a5147 !important}.event-price{color:var(--b-ink) !important}
+.event-dot{background:var(--b-soft) !important}
+.event[class*="SUCCESS_T"] .event-dot,.event[class*="TARGET_T"] .event-dot{background:var(--b-pos) !important;box-shadow:none !important}
+.event.FAILED .event-dot{background:var(--b-neg) !important}.event.EXPIRED .event-dot{background:var(--b-focus) !important}
+.status-pill{border-color:var(--b-line) !important;color:var(--b-soft) !important}
+@media(max-width:900px){.life-summary{grid-template-columns:repeat(2,1fr)}}
+
+/* Comunidade / chat */
+.community-aside{background:var(--b-paper2) !important;border-right:2px solid var(--b-ink) !important}
+.community-kicker{color:var(--b-pos) !important}
+.community-aside h2{color:var(--b-ink) !important}.community-aside p{color:var(--b-soft) !important}
+.wallet-card{background:var(--b-card) !important;border:2px solid var(--b-line) !important;color:var(--b-soft) !important}
+.wallet-card strong{color:var(--b-pos) !important}
+.chat-head{border-bottom:2px solid var(--b-ink) !important}
+.chat-gate h3{color:var(--b-ink) !important}.chat-gate p{color:var(--b-soft) !important}
+.chat-message{background:var(--b-paper2) !important;border:2px solid var(--b-line) !important;color:var(--b-ink) !important}
+.chat-message.mine{background:var(--b-gold2) !important;border-color:var(--b-gold) !important}
+.chat-meta{color:var(--b-soft) !important}.chat-body{color:var(--b-ink) !important}
+.chat-compose{border-top:2px solid var(--b-ink) !important}
+.chat-compose input{background:var(--b-card) !important;border:2px solid var(--b-ink) !important;color:var(--b-ink) !important}
+
+/* Botões genéricos */
+button{font-family:Oswald,sans-serif !important;background:var(--b-card) !important;color:var(--b-ink) !important;border:2px solid var(--b-ink) !important;border-radius:999px !important}
+button:hover{border-color:var(--b-ink) !important;color:var(--b-ink) !important;background:var(--b-gold2) !important;transform:translateY(-1px)}
+button.primary{background:var(--b-gold) !important;color:var(--b-ink) !important}
+
+/* Rodapé / toast */
+.footer{color:var(--b-soft) !important;border-top:2px dashed var(--b-line) !important}
+.toast{background:var(--b-ink) !important;color:var(--b-paper) !important;border-radius:10px}
+.toast.bad{background:var(--b-neg) !important;color:#fff !important}
+
+/* Modal de gráfico */
+.chart-shell{background:var(--b-paper) !important;border:3px solid var(--b-ink) !important;border-radius:16px}
+.chart-head{border-bottom:2px solid var(--b-ink) !important}
+.chart-name{color:var(--b-ink) !important;font-family:Oswald,sans-serif}
+.chart-close{color:var(--b-ink) !important}
+.brief h3{color:var(--b-soft) !important;font-family:Oswald,sans-serif}
+.brief li{color:var(--b-ink) !important;border-bottom-color:var(--b-line) !important}
+.brief li:before{color:var(--b-pos) !important}.brief .risks li:before{color:var(--b-neg) !important}
+.signal-numbers{background:var(--b-line) !important;border-color:var(--b-ink) !important}
+.signal-number{background:var(--b-paper2) !important}.signal-number b{color:var(--b-ink) !important}
+.confirmation{background:var(--b-paper2) !important;border-color:var(--b-line) !important;color:var(--b-ink) !important}
+#signalChart{background:var(--b-card) !important;border-color:var(--b-line) !important}
+</style>
 </head>
 <body>
 <main class="shell">
   <header class="top"><div class="brand"><div class="mark"></div><div><h1>Market Sentinel</h1><div class="sub">READ-ONLY SIGNAL INTELLIGENCE</div></div></div><div class="top-actions"><button id="walletButton" class="wallet-button">Conectar carteira</button><select id="language" class="language-select" aria-label="Idioma"><option value="pt">Português</option><option value="en">English</option><option value="es">Español</option></select><div class="live"><i id="dot" class="dot"></i><span id="state">OFFLINE</span></div></div></header>
-  <section class="hero"><div><h2 class="headline">VIGILÂNCIA DE MERCADO,<br><em>SEM RUÍDO.</em></h2><div class="controls"><button id="start" class="primary">Iniciar monitor</button><button id="scan">Varrer agora</button><button id="stop" class="danger">Parar</button><button id="refresh">Atualizar mercados</button></div></div><div class="hero-note">Sinais em candles fechados: estrutura, médias 20/50/200, volume, ATR, RSI, MACD, liquidez e risco/retorno. O regime diário do BTC vale somente para criptos. Nenhuma ordem é executada.</div></section>
+  <section class="hero"><div><h2 class="headline">VIGILÂNCIA DE MERCADO,<br><em>SEM RUÍDO.</em></h2><!-- controles de automação removidos: o disparo é automático via GitHub Actions --></div><div class="hero-note">Sinais em candles fechados: estrutura, médias 20/50/200, volume, ATR, RSI, MACD, liquidez e risco/retorno. O regime diário do BTC vale somente para criptos. Nenhuma ordem é executada.</div></section>
   <section class="metrics"><div class="metric"><div class="label">Mercados</div><div class="value" id="markets">—</div></div><div class="metric"><div class="label">Cripto</div><div class="value" id="crypto">—</div></div><div class="metric"><div class="label">Commodities</div><div class="value" id="commodities">—</div></div><div class="metric"><div class="label">Stocks EUA</div><div class="value" id="stocks">—</div></div><div class="metric"><div class="label">Índices</div><div class="value" id="indices">—</div></div><div class="metric"><div class="label">Telegram</div><div class="value small" id="telegram">—</div></div></section>
-  <section class="grid"><div class="panel"><div class="panel-head"><span class="panel-title">Oportunidades qualificadas</span><div class="filter-wrap"><select id="opVenue" class="venue-filter" aria-label="Filtrar por plataforma"><option value="all">Todas as plataformas</option><option value="hyperliquid">Hyperliquid</option><option value="nado">Nado</option><option value="backpack">Backpack</option></select><span class="count" id="opcount">0 SINAIS</span></div></div><div id="cards" class="cards"><div class="empty">Nenhuma varredura concluída.<br>Use “Varrer agora” ou inicie o monitor.</div></div></div><aside class="panel"><div class="panel-head"><span class="panel-title">Console operacional</span><span class="count" id="logHealth">AO VIVO</span></div><div id="logs" class="logs">Aguardando eventos…</div></aside></section>
+  <section class="grid"><div class="panel"><div class="panel-head"><span class="panel-title">Oportunidades qualificadas</span><div class="filter-wrap"><select id="opVenue" class="venue-filter" aria-label="Filtrar por plataforma"><option value="all">Todas as plataformas</option><option value="hyperliquid">Hyperliquid</option><option value="nado">Nado</option><option value="backpack">Backpack</option></select><span class="count" id="opcount">0 SINAIS</span></div></div><div id="cards" class="cards"><div class="empty">Aguardando a próxima varredura automática.</div></div></div><aside class="panel"><div class="panel-head"><span class="panel-title">Console operacional</span><span class="count" id="logHealth">AO VIVO</span></div><div id="logs" class="logs">Aguardando eventos…</div></aside></section>
   <section class="panel watchlist"><div class="panel-head"><span class="panel-title">Cenários em preparação</span><span class="count" id="candidateCount">0 PODEM ACONTECER</span></div><div class="watch-note"><strong>PODE ACONTECER — NÃO É ENTRADA.</strong> A probabilidade exibida é uma estimativa de prontidão técnica, não chance comprovada de lucro.</div><div class="candidate-filters"><label>Probabilidade mínima<select id="candidateProbability" class="venue-filter"><option value="0">Qualquer %</option><option value="60">60%+</option><option value="70">70%+</option><option value="80">80%+</option></select></label><label>R:R mínimo<select id="candidateRR" class="venue-filter"><option value="0">Qualquer R:R</option><option value="1.5">1,5+</option><option value="2">2,0+</option><option value="3">3,0+</option></select></label><label>Plataforma<select id="candidateVenue" class="venue-filter"><option value="all">Todas</option><option value="hyperliquid">Hyperliquid</option><option value="nado">Nado</option><option value="backpack">Backpack</option></select></label><label>Tempo gráfico<select id="candidateTimeframe" class="venue-filter"><option value="all">Todos</option><option value="1h">1 hora</option><option value="4h">4 horas</option><option value="1d">Diário</option></select></label><label>Direção<select id="candidateDirection" class="venue-filter"><option value="all">Long e short</option><option value="LONG">Long</option><option value="SHORT">Short</option></select></label></div><div id="candidateCards" class="candidate-grid"><div class="empty">Aguardando a próxima varredura para montar cenários.</div></div></section>
   <section class="panel lifecycle"><div class="panel-head"><span class="panel-title">Ciclo de vida das oportunidades</span><span class="count">AUDITORIA PERSISTENTE</span></div><div class="life-summary"><div class="life-stat"><div class="label">Ativas</div><div class="life-number" id="activeSignals">0</div></div><div class="life-stat"><div class="label">Concretizadas</div><div class="life-number" id="wins">0</div></div><div class="life-stat"><div class="label">Falhas</div><div class="life-number" id="losses">0</div></div><div class="life-stat"><div class="label">Taxa de concretização</div><div class="life-number" id="winRate">—</div></div></div><div id="timeline" class="timeline"><div class="empty">Os eventos de criação, alvos e stop aparecerão aqui.</div></div></section>
   <section id="community" class="panel community"><aside class="community-aside"><div class="community-kicker">COMUNIDADE · WEB3</div><h2>Converse com quem está lendo o mesmo mercado.</h2><p>O acesso usa uma assinatura de mensagem. Nenhuma transação é criada e a aplicação nunca solicita sua chave privada.</p><div class="wallet-card"><span class="label">IDENTIDADE ATUAL</span><strong id="walletIdentity">NÃO CONECTADA</strong><span id="walletPlan">PLANO FREE · PAGAMENTOS EM BREVE</span></div></aside><div class="chat-room"><div class="chat-head"><span class="panel-title">Chat dos usuários</span><span id="chatStatus" class="chat-status">LOGIN NECESSÁRIO</span></div><div id="chatGate" class="chat-gate"><h3>Entre com sua carteira Web3</h3><p>Assine uma mensagem gratuita para provar que a carteira é sua e liberar o chat.</p><button id="chatConnect" class="primary">Conectar carteira</button></div><div id="chatMessages" class="chat-messages social-hidden"></div><form id="chatCompose" class="chat-compose social-hidden"><input id="chatInput" maxlength="500" autocomplete="off" placeholder="Compartilhe uma leitura do mercado…" aria-label="Mensagem"><button type="submit" class="primary">Enviar</button></form></div></section>
@@ -109,7 +293,7 @@ async function loadChat(){if(!currentUser)return;try{const data=await api(`/api/
 function startChat(){stopChat();loadChat();chatTimer=setInterval(loadChat,4000)}function stopChat(){if(chatTimer)clearInterval(chatTimer);chatTimer=null}
 $('#walletButton').onclick=()=>currentUser?logoutWallet():connectWallet();$('#chatConnect').onclick=connectWallet;$('#chatCompose').addEventListener('submit',async e=>{e.preventDefault();const input=$('#chatInput'),body=input.value.trim();if(!body)return;input.disabled=true;try{const message=await api('/api/chat/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body})});input.value='';const box=$('#chatMessages');box.insertAdjacentHTML('beforeend',chatMessageHTML(message));lastChatId=Math.max(lastChatId,Number(message.id));box.scrollTop=box.scrollHeight}catch(err){toast(err.message,true)}finally{input.disabled=false;input.focus()}});if(window.ethereum)window.ethereum.on?.('accountsChanged',async()=>{if(currentUser){await logoutWallet();toast('Carteira alterada. Conecte novamente para assinar com a nova conta.')}});
 function setBusy(v){busy=v;document.querySelectorAll('button').forEach(b=>b.disabled=v)}
-async function status(){try{const s=await api('/api/status'),age=s.last_scan_at?Math.max(0,Math.floor(Date.now()/1000-s.last_scan_at)):null,fresh=age!=null&&age<Math.max(180,Number(s.interval_seconds||60)*3),active=s.running||s.scanning||s.scheduled,ageLabel=age<60?'ATUALIZADO AGORA':`ATUALIZADO HÁ ${Math.floor(age/60)} MIN`;$('#state').textContent=s.scanning?'VARRENDO AGORA':s.running?(age==null?'INICIANDO MONITOR':fresh?ageLabel:`ATRASADO · ${Math.floor(age/60)} MIN`):s.scheduled?(age==null?'AGUARDANDO 1ª VARREDURA':fresh?ageLabel:`ATRASADO · ${Math.floor(age/60)} MIN`):'EM ESPERA';$('#dot').className='dot '+(active&&fresh?'on':'');$('#markets').textContent=fmt(s.market_count);$('#crypto').textContent=fmt(s.classes.crypto);$('#commodities').textContent=fmt(s.classes.tokenized_commodity);$('#stocks').textContent=fmt(s.classes.us_tokenized_stock);$('#telegram').textContent=s.telegram?'CONECTADO':'AINDA NÃO DEFINIDO';$('#telegram').style.color=s.telegram?'var(--lime)':'var(--amber)';if(s.scheduled){$('#start').style.display='none';$('#stop').style.display='none';$('#scan').style.display='none'}if(s.last_error)toast(s.last_error,true)}catch{$('#state').textContent='API OFFLINE';$('#dot').className='dot'}}
+async function status(){try{const s=await api('/api/status'),age=s.last_scan_at?Math.max(0,Math.floor(Date.now()/1000-s.last_scan_at)):null,fresh=age!=null&&age<Math.max(180,Number(s.interval_seconds||60)*3),active=s.running||s.scanning||s.scheduled,ageLabel=age<60?'ATUALIZADO AGORA':`ATUALIZADO HÁ ${Math.floor(age/60)} MIN`;$('#state').textContent=s.scanning?'VARRENDO AGORA':s.running?(age==null?'INICIANDO MONITOR':fresh?ageLabel:`ATRASADO · ${Math.floor(age/60)} MIN`):s.scheduled?(age==null?'AGUARDANDO 1ª VARREDURA':fresh?ageLabel:`ATRASADO · ${Math.floor(age/60)} MIN`):'EM ESPERA';$('#dot').className='dot '+(active&&fresh?'on':'');$('#markets').textContent=fmt(s.market_count);$('#crypto').textContent=fmt(s.classes.crypto);$('#commodities').textContent=fmt(s.classes.tokenized_commodity);$('#stocks').textContent=fmt(s.classes.us_tokenized_stock);$('#telegram').textContent=s.telegram?'CONECTADO':'AINDA NÃO DEFINIDO';$('#telegram').style.color=s.telegram?'var(--lime)':'var(--amber)';/* controles de automação removidos */if(s.last_error)toast(s.last_error,true)}catch{$('#state').textContent='API OFFLINE';$('#dot').className='dot'}}
 function filtered(rows,id){const venue=$(id).value;return venue==='all'?rows:rows.filter(x=>x.venue===venue)}
 async function loadIndexCount(){try{const s=await api('/api/status');$('#indices').textContent=fmt(s.classes.tokenized_index)}catch{}}
 function signalTargets(s){return [1,2,3,4,5].map(n=>[n,s[`target${n}`]]).filter(([,v])=>v!=null)}
@@ -127,7 +311,7 @@ function eventLabel(type){if(type.startsWith('SUCCESS_T'))return 'SUCESSO T'+typ
 async function lifecycle(){try{const snap=await api('/api/dashboard-snapshot'),version=Number(snap.version||0);if(version<lifecycleVersion)return;const events=snap.events||[],counts=snap.lifecycle?.counts||{},sig=JSON.stringify([version,counts,events.map(e=>e.id)]);if(sig===lifecycleSignature)return;lifecycleVersion=version;lifecycleSignature=sig;const wins=[1,2,3,4,5].reduce((sum,n)=>sum+(counts[`SUCCESS_T${n}`]||0),0),losses=counts.FAILED||0;$('#activeSignals').textContent=counts.ACTIVE||0;$('#wins').textContent=wins;$('#losses').textContent=losses;$('#winRate').textContent=snap.lifecycle?.success_rate==null?'—':`${snap.lifecycle.success_rate}%`;const box=$('#timeline');if(!events.length){box.innerHTML='<div class="empty">Os eventos de criação, alvos e stop aparecerão aqui.</div>';return}box.innerHTML=events.map(e=>{const d=new Date(e.created_at*1000),price=e.price==null?'':Number(e.price).toPrecision(7),label=eventLabel(e.event_type);return `<div class="event ${e.event_type}"><span class="event-time">${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span><i class="event-dot"></i><span class="event-symbol">${e.symbol}<span class="status-pill">${label}</span><br>${e.venue} · ${e.timeframe}</span><span class="event-message">${e.message}</span><span class="event-price">${price}</span></div>`}).join('')}catch{}}
 async function refreshDashboard(){try{const d=await api('/api/dashboard-state'),version=Number(d.version||0);if(version<lifecycleVersion)return;lifecycleVersion=version;const s=d.status,age=s.last_scan_at?Math.max(0,Math.floor(Date.now()/1000-s.last_scan_at)):null,fresh=age!=null&&age<Math.max(180,Number(s.interval_seconds||60)*3),active=s.running||s.scanning||s.scheduled,ageLabel=age<60?'ATUALIZADO AGORA':`ATUALIZADO HÁ ${Math.floor(age/60)} MIN`;$('#state').textContent=s.scanning?'VARRENDO AGORA':s.running?(age==null?'INICIANDO MONITOR':fresh?ageLabel:`ATRASADO · ${Math.floor(age/60)} MIN`):s.scheduled?(age==null?'AGUARDANDO 1ª VARREDURA':fresh?ageLabel:`ATRASADO · ${Math.floor(age/60)} MIN`):'EM ESPERA';$('#dot').className='dot '+(active&&fresh?'on':'');$('#markets').textContent=fmt(s.market_count);$('#crypto').textContent=fmt(s.classes.crypto);$('#commodities').textContent=fmt(s.classes.tokenized_commodity);$('#stocks').textContent=fmt(s.classes.us_tokenized_stock);$('#indices').textContent=fmt(s.classes.tokenized_index);$('#telegram').textContent=s.telegram?'CONECTADO':'NÃO CONFIGURADO';$('#telegram').style.color=s.telegram?'var(--lime)':'var(--amber)';const run=s.latest_run;if(run){$('#logHealth').textContent=run.status==='completed'&&!run.errors?`CICLO OK · ${run.markets}`:`PARCIAL · ${run.errors} FALHAS`;$('#logHealth').style.color=run.errors?'var(--amber)':'var(--lime)'}const opSig=JSON.stringify(d.opportunities.map(x=>[x.id,x.status,x.score]));if(opSig!==opsSignature){opsSignature=opSig;allOps=d.opportunities;render()}const candSig=JSON.stringify(d.candidates.map(x=>[x.venue,x.symbol,x.timeframe,x.direction,x.candle_timestamp,x.readiness]));if(candSig!==candidateSignature){candidateSignature=candSig;allCandidates=d.candidates;renderCandidates()}const logSig=JSON.stringify(d.logs);if(logSig!==logsSignature){logsSignature=logSig;renderLogs(d.logs)}const counts=s.lifecycle?.counts||{},events=d.events||[],lifeSig=JSON.stringify([version,counts,events.map(e=>e.id)]);if(lifeSig!==lifecycleSignature){lifecycleSignature=lifeSig;const wins=[1,2,3,4,5].reduce((sum,n)=>sum+(counts[`SUCCESS_T${n}`]||0),0);$('#activeSignals').textContent=counts.ACTIVE||0;$('#wins').textContent=wins;$('#losses').textContent=counts.FAILED||0;$('#winRate').textContent=s.lifecycle?.success_rate==null?'—':`${s.lifecycle.success_rate}%`;const box=$('#timeline');box.innerHTML=events.length?events.map(e=>{const dt=new Date(e.created_at*1000),price=e.price==null?'':Number(e.price).toPrecision(7),label=eventLabel(e.event_type);return `<div class="event ${e.event_type}"><span class="event-time">${dt.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})} ${dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span><i class="event-dot"></i><span class="event-symbol">${e.symbol}<span class="status-pill">${label}</span><br>${e.venue} · ${e.timeframe}</span><span class="event-message">${e.message}</span><span class="event-price">${price}</span></div>`}).join(''):'<div class="empty">Os eventos de criação, alvos e stop aparecerão aqui.</div>'}}catch{$('#state').textContent='API OFFLINE';$('#dot').className='dot'}}
 async function act(path,msg){if(busy)return;setBusy(true);try{const data=await api(path,{method:'POST'});if(path.endsWith('scan'))render(data);toast(msg)}catch(e){toast(e.message,true)}finally{setBusy(false);await status();await logs()}}
-$('#start').onclick=()=>act('/api/start','Monitor iniciado');$('#stop').onclick=()=>act('/api/stop','Monitor parado');$('#scan').onclick=()=>act('/api/scan','Varredura concluída');$('#refresh').onclick=async()=>{setBusy(true);try{await api('/api/markets?refresh=true');toast('Universo atualizado')}catch(e){toast(e.message,true)}finally{setBusy(false);status()}};
+/* controles de automação removidos — disparo automático via GitHub Actions */
 $('#opVenue').onchange=()=>render();['#candidateVenue','#candidateProbability','#candidateRR','#candidateTimeframe','#candidateDirection'].forEach(id=>$(id).onchange=()=>renderCandidates());
 function setupNavigation(){const grid=$('.grid'),watch=$('.watchlist'),history=$('.lifecycle'),system=$('.grid aside'),hero=$('.hero'),metrics=$('.metrics');if(grid)grid.id='radar';if(watch)watch.id='scenarios';if(history)history.id='history';if(system)system.id='system';if(hero&&metrics)hero.parentNode.insertBefore(metrics,hero);document.body.insertAdjacentHTML('afterbegin','<aside class="desktop-nav" aria-label="Navegação principal"><div class="desktop-brand"><div class="mark"></div><div><h2>MARKET SENTINEL</h2><span>COMMAND CENTER</span></div></div><nav class="desktop-links"><a href="#radar"><b>⌁</b>Radar ao vivo</a><a href="#scenarios"><b>◇</b>Cenários</a><a href="/memecoins-analyser"><b>◉</b>Memecoins Analyser</a><a href="#history"><b>↗</b>Desempenho</a><a href="#community"><b>◎</b>Chat Web3</a><a href="#system"><b>≡</b>Sistema e logs</a></nav><div class="desktop-help"><strong>MÓDULO INDEPENDENTE</strong>O Memecoins Analyser possui página própria para investigar lançamentos e atividade pública da Solana.</div></aside>');document.body.insertAdjacentHTML('beforeend','<nav class="mobile-nav" aria-label="Navegação principal"><a href="#radar"><b>⌁</b>Radar</a><a href="#scenarios"><b>◇</b>Cenários</a><a href="/memecoins-analyser"><b>◉</b>Memecoins</a><a href="#history"><b>↗</b>Histórico</a><a href="#community"><b>◎</b>Chat</a><a href="#system"><b>≡</b>Sistema</a></nav>')}
 ['#opVenue','#candidateVenue'].forEach(id=>{const s=$(id);if(s&&!s.querySelector('option[value="arcus"]'))s.insertAdjacentHTML('beforeend','<option value="arcus">Arcus</option>')});setupNavigation();prepareLearningStatus();stabilizeLiveView();initLanguage();loadWallet();refreshDashboard();loadPrices();loadLearning();setInterval(refreshDashboard,8000);setInterval(loadPrices,5000);setInterval(loadLearning,60000);
