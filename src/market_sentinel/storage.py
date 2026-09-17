@@ -9,24 +9,33 @@ from .models import Opportunity
 
 
 class Store:
+    """Persistência do radar de futuros.
+
+    Backend do banco de mercado (sinais, runs, candidatos, aprendizado):
+      - Turso/libSQL remoto quando TURSO_DATABASE_URL está definido. Cada
+        operação trafega só as linhas necessárias — não o arquivo inteiro,
+        eliminando o estouro de egress do modelo anterior (blob no Supabase).
+      - SQLite local como fallback (dev/testes) quando o Turso não está
+        configurado ou está inacessível.
+
+    Os campos e métodos SUPABASE_* continuam existindo porque o SocialStore
+    (login Web3, usuários e chat) usa o Supabase Postgres via PostgREST. Eles
+    NÃO têm mais relação com o banco de mercado.
+    """
+
     def __init__(self, path: str):
+        # --- Supabase: usado apenas pelo SocialStore (login/usuários/chat) ---
         self.remote_url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.remote_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
         self.remote_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "sentinel")
         self.remote_object = os.getenv("SUPABASE_DB_OBJECT", "sentinel.db")
-        self.upload_remote = os.getenv("SYNC_DB_UPLOAD", "false").lower() in {"1", "true", "yes"}
+        # --- Turso/libSQL: banco de mercado ---
+        self.turso_url = os.getenv("TURSO_DATABASE_URL", "").strip()
+        self.turso_token = os.getenv("TURSO_AUTH_TOKEN", "").strip()
         self.remote_error: str | None = None
         self.path = Path(path)
-        if self.remote_url and self.remote_key:
-            self.path = Path(os.getenv("SYNC_DB_LOCAL_PATH", "/tmp/market-sentinel.db"))
-            try:
-                self._download_remote()
-            except Exception as exc:
-                self.remote_error = f"{type(exc).__name__}: {exc}"
-        self.last_remote_sync = time.time()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = self._connect()
-        self.db.executescript("""
+        self._run_script("""
         CREATE TABLE IF NOT EXISTS alerts (
           fingerprint TEXT PRIMARY KEY, sent_at INTEGER NOT NULL, candle_timestamp INTEGER NOT NULL,
           venue TEXT NOT NULL, symbol TEXT NOT NULL, timeframe TEXT NOT NULL, score INTEGER NOT NULL
@@ -129,11 +138,47 @@ class Store:
         self.db.commit()
 
     def _connect(self):
+        """Conecta ao banco de mercado.
+
+        Turso/libSQL remoto quando configurado; se a conexão falhar, registra
+        remote_error e cai para um SQLite local (o app segue de pé e o status
+        expõe o erro em vez de derrubar o serviço). Sem Turso, usa SQLite local.
+        """
+        if self.turso_url:
+            try:
+                import libsql  # dependência só necessária no modo remoto
+                conn = libsql.connect(
+                    database=self.turso_url,
+                    auth_token=self.turso_token or None,
+                )
+                conn.execute("SELECT 1").fetchone()  # valida a conexão de fato
+                try:
+                    conn.execute("PRAGMA foreign_keys=ON")
+                except Exception:
+                    pass
+                self.remote_error = None
+                return conn
+            except Exception as exc:
+                # Não derruba o processo: degrada para local e expõe o erro.
+                self.remote_error = f"{type(exc).__name__}: {exc}"
+                fallback = Path(os.getenv("SYNC_DB_LOCAL_PATH", "/tmp/market-sentinel.db"))
+                fallback.parent.mkdir(parents=True, exist_ok=True)
+                self.path = fallback
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, check_same_thread=False)
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA busy_timeout=5000")
         db.execute("PRAGMA foreign_keys=ON")
         return db
+
+    def _run_script(self, script: str):
+        """Executa um bloco DDL statement a statement (portável entre
+        sqlite3 e libsql). O schema não contém ';' dentro de literais, então
+        o split é seguro."""
+        for statement in script.split(";"):
+            statement = statement.strip()
+            if statement:
+                self.db.execute(statement)
 
     def add_operational_log(self, level: str, message: str, created_at: int | None = None,
                             component: str = "core", event: str | None = None):
@@ -148,18 +193,18 @@ class Store:
         try:
             rows = self.db.execute("""SELECT id,created_at,level,component,event,message FROM operational_logs
                 ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
-        except sqlite3.OperationalError:
-            # A warm Vercel function may briefly hold the previous remote schema.
-            # Keep the dashboard API alive until the next synced snapshot arrives.
+        except Exception:
+            # Mantém a API do dashboard viva se o schema ainda não migrou.
             return []
         keys = ("id", "created_at", "level", "component", "event", "message")
         return [dict(zip(keys, row)) for row in reversed(rows)]
 
     def start_run(self) -> int:
-        cursor = self.db.execute("INSERT INTO runs(started_at,status) VALUES(?,'running')",
-                                 (int(time.time()),))
+        self.db.execute("INSERT INTO runs(started_at,status) VALUES(?,'running')",
+                        (int(time.time()),))
+        run_id = self.db.execute("SELECT last_insert_rowid()").fetchone()[0]
         self.db.commit()
-        return int(cursor.lastrowid)
+        return int(run_id)
 
     def finish_run(self, run_id: int, *, markets: int, opportunities: int, candidates: int,
                    errors: int, status: str, diagnostics: dict | None = None):
@@ -309,7 +354,7 @@ class Store:
             if recent:
                 return recent[0], False
         key = f"{op.fingerprint}:{op.candle_timestamp}"
-        cursor = self.db.execute("""INSERT OR IGNORE INTO signals
+        self.db.execute("""INSERT OR IGNORE INTO signals
             (signal_key,fingerprint,venue,symbol,asset_class,market_type,timeframe,direction,setup,
              entry,stop,target1,target2,target3,target4,target5,risk_reward,score,opened_at,candle_timestamp,status,reasons_json,risks_json,
              score_breakdown_json,confirmation_count,base_score,learning_adjustment,learning_evidence_json)
@@ -322,10 +367,13 @@ class Store:
               json.dumps(op.score_breakdown, ensure_ascii=False), op.confirmation_count,
               op.base_score if op.base_score is not None else op.score, op.learning_adjustment,
               json.dumps(op.learning_evidence, ensure_ascii=False)))
-        if not cursor.rowcount:
+        # changes()/last_insert_rowid() são portáveis entre sqlite3 e libsql
+        # (cursor.rowcount/lastrowid não são confiáveis no cliente remoto).
+        changed = self.db.execute("SELECT changes()").fetchone()[0]
+        if not changed:
             row = self.db.execute("SELECT id FROM signals WHERE signal_key=?", (key,)).fetchone()
             return row[0], False
-        signal_id = cursor.lastrowid
+        signal_id = int(self.db.execute("SELECT last_insert_rowid()").fetchone()[0])
         targets = ", ".join(f"alvo {index} {target:.8g}"
                             for index, target in enumerate(op.targets, 1))
         self._event(signal_id, "CREATED", f"Oportunidade registrada: {op.setup}; {targets}", op.entry)
@@ -494,9 +542,7 @@ class Store:
         if column not in columns:
             self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-    def _remote_object_url(self):
-        return f"{self.remote_url}/storage/v1/object/{self.remote_bucket}/{self.remote_object}"
-
+    # --- Supabase (usado só pelo SocialStore: login Web3, usuários, chat) ---
     def _remote_headers(self):
         headers = {"apikey": self.remote_key}
         # New sb_secret_* keys are opaque API keys and are rejected as Bearer
@@ -505,52 +551,19 @@ class Store:
             headers["Authorization"] = f"Bearer {self.remote_key}"
         return headers
 
-    def _download_remote(self):
-        response = httpx.get(
-            self._remote_object_url(),
-            params={"snapshot": str(time.time_ns())},
-            headers={**self._remote_headers(), "Cache-Control": "no-cache, no-store"},
-            timeout=30,
-        )
-        detail = response.text[:500]
-        # Supabase Storage may encode a missing bucket/object as HTTP 400 with
-        # an internal 404 status. An empty first run is valid and creates DB locally.
-        if response.status_code == 404 or (response.status_code == 400 and
-                any(term in detail.lower() for term in ("not found", "does not exist", '"statuscode":"404"'))):
-            return
-        if response.is_error:
-            raise RuntimeError(f"Supabase Storage respondeu {response.status_code}: {detail}")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not response.content.startswith(b"SQLite format 3"):
-            raise RuntimeError("O objeto baixado do Supabase não é um banco SQLite válido")
-        temporary = self.path.with_suffix(".download")
-        temporary.write_bytes(response.content)
-        # A previous warm serverless invocation may have left a WAL that belongs
-        # to another database generation. Replaying it would make fresh data look stale.
-        for suffix in ("-wal", "-shm"):
-            Path(f"{self.path}{suffix}").unlink(missing_ok=True)
-        temporary.replace(self.path)
-        self.remote_error = None
-
-    def _upload_remote(self):
-        response = httpx.post(self._remote_object_url(), headers={**self._remote_headers(), "x-upsert": "true",
-            "Content-Type": "application/octet-stream"}, content=self.path.read_bytes(), timeout=60)
-        response.raise_for_status()
-
     def sync_from_remote(self):
-        if not self.remote_url or not self.remote_key or self.upload_remote or time.time() - self.last_remote_sync < 30:
-            return
-        self.db.close()
-        try:
-            self._download_remote()
-        except Exception as exc:
-            self.remote_error = f"{type(exc).__name__}: {exc}"
-        finally:
-            self.db = self._connect()
-            self.last_remote_sync = time.time()
+        """No-op: o banco de mercado agora é o Turso remoto (ou SQLite local).
+        Cada leitura já enxerga os dados atuais gravados pelo worker — não há
+        mais download de arquivo. Mantido pela compatibilidade com a web."""
+        return
 
     def close(self):
-        self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        self.db.close()
-        if self.upload_remote and self.remote_url and self.remote_key:
-            self._upload_remote()
+        try:
+            if not self.turso_url:
+                self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass
+        try:
+            self.db.close()
+        except Exception:
+            pass
