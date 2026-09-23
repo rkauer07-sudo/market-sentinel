@@ -32,7 +32,24 @@ create table if not exists public.sentinel_chat_messages (
 create index if not exists sentinel_chat_messages_id_idx
   on public.sentinel_chat_messages(id desc) where deleted_at is null;
 
+-- Pagamentos VIP (10 USDC na Solana = 31 dias). A assinatura da transação é
+-- única: a mesma transferência nunca libera dois períodos.
+create table if not exists public.sentinel_vip_payments (
+  reference text primary key,
+  wallet_address text not null references public.sentinel_users(wallet_address),
+  memo text not null,
+  amount_usdc numeric not null,
+  created_at bigint not null,
+  expires_at bigint not null,
+  status text not null default 'pending' check (status in ('pending', 'paid')),
+  signature text unique,
+  paid_at bigint
+);
+create index if not exists sentinel_vip_payments_wallet_idx
+  on public.sentinel_vip_payments(wallet_address, created_at desc);
+
 alter table public.sentinel_users enable row level security;
+alter table public.sentinel_vip_payments enable row level security;
 alter table public.sentinel_auth_nonces enable row level security;
 alter table public.sentinel_chat_messages enable row level security;
 

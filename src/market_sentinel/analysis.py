@@ -36,6 +36,89 @@ def rsi(values, period=14):
     return 100 - 100 / (1 + gains / losses)
 
 
+def support_zones(candles: list[Candle], direction: str, price: float, current_atr: float,
+                  window: int = 3, lookback: int = 120, merge_atr: float = .35) -> list[dict]:
+    """Cluster swing pivots into support (LONG) or resistance (SHORT) zones.
+
+    Each zone keeps the level (average pivot), how many times it was defended
+    and the deepest wick that pierced it and still closed back on the right
+    side — the liquidity sweep a structural stop must survive.
+    """
+    recent = candles[-lookback:]
+    if len(recent) < 2 * window + 1 or current_atr <= 0:
+        return []
+    below = direction == "LONG"
+    pivots_found: list[float] = []
+    for i in range(window, len(recent) - window):
+        chunk = recent[i - window:i + window + 1]; candle = recent[i]
+        if below and candle.low == min(x.low for x in chunk) and candle.low < price:
+            pivots_found.append(candle.low)
+        if not below and candle.high == max(x.high for x in chunk) and candle.high > price:
+            pivots_found.append(candle.high)
+    pivots_found.sort(reverse=below)  # nearest to price first
+    zones: list[list[float]] = []
+    for level in pivots_found:
+        if zones and abs(fmean(zones[-1]) - level) <= merge_atr * current_atr:
+            zones[-1].append(level)
+        else:
+            zones.append([level])
+    result = []
+    for members in zones:
+        level = fmean(members)
+        if below:
+            sweeps = [c.low for c in recent if level - 1.5 * current_atr <= c.low < level and c.close >= level]
+            extreme = min(members + sweeps)
+        else:
+            sweeps = [c.high for c in recent if level < c.high <= level + 1.5 * current_atr and c.close <= level]
+            extreme = max(members + sweeps)
+        result.append({"level": level, "touches": len(members) + len(sweeps), "extreme": extreme})
+    return result
+
+
+def structural_stop(candles: list[Candle], direction: str, entry: float, current_atr: float,
+                    cfg: dict, anchor: float | None = None) -> tuple[float, dict] | None:
+    """Place the stop beyond the nearest defended support/resistance.
+
+    Price frequently dips *through* a support, hunts the obvious stops just
+    below it and closes back above. So the stop goes under the whole zone —
+    below the deepest wick that already swept it — plus an ATR buffer, never
+    exactly on the level. ``anchor`` is the setup's own level (the retested
+    breakout or the pullback extreme) and is merged in as a support candidate.
+    Returns (stop, info) or None when no zone fits within ``max_stop_atr``.
+    """
+    buffer = current_atr * float(cfg.get("stop_buffer_atr", .3))
+    min_distance = current_atr * float(cfg.get("min_stop_atr", .8))
+    max_distance = current_atr * float(cfg.get("max_stop_atr", 3.5))
+    long = direction == "LONG"
+    zones = support_zones(candles, direction, entry, current_atr,
+                          int(cfg.get("pivot_window", 3)), int(cfg.get("stop_lookback", 120)))
+    if anchor is not None and ((long and anchor < entry) or (not long and anchor > entry)):
+        sweeps = [c.low if long else c.high for c in candles[-int(cfg.get("stop_lookback", 120)):]
+                  if (long and anchor - 1.5 * current_atr <= c.low < anchor and c.close >= anchor)
+                  or (not long and anchor < c.high <= anchor + 1.5 * current_atr and c.close <= anchor)]
+        extreme = (min([anchor] + sweeps) if long else max([anchor] + sweeps))
+        zones.append({"level": anchor, "touches": 1 + len(sweeps), "extreme": extreme, "anchor": True})
+    # Ignore zones hugging the entry: a stop there is noise, not structure.
+    eligible = [z for z in zones if abs(entry - z["level"]) >= .15 * current_atr]
+    eligible.sort(key=lambda z: abs(entry - z["level"]))
+    # Prefer the nearest zone the market actually defended more than once;
+    # a lone swing point is used only when no defended zone is within reach.
+    min_touches = int(cfg.get("stop_min_touches", 2))
+    eligible = ([z for z in eligible if z["touches"] >= min_touches]
+                + [z for z in eligible if z["touches"] < min_touches])
+    for zone in eligible:
+        stop = zone["extreme"] - buffer if long else zone["extreme"] + buffer
+        distance = abs(entry - stop)
+        if distance < min_distance:
+            stop = entry - min_distance if long else entry + min_distance
+            distance = min_distance
+        if distance > max_distance:
+            continue
+        return stop, {"level": zone["level"], "touches": zone["touches"],
+                      "extreme": zone["extreme"], "distance_atr": distance / current_atr}
+    return None
+
+
 def fibonacci_targets(entry: float, stop: float, direction: str) -> tuple[float, ...]:
     """Five Fibonacci extensions measured from entry using the stop distance as 1R."""
     risk = abs(entry - stop)
@@ -170,6 +253,17 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
         direction, entry, stop = pullback
         setup = ("pullback de continuação (alta)" if direction == "LONG"
                  else "pullback de continuação (baixa)")
+    if long_retest is not None:
+        anchor = long_retest
+    elif short_retest is not None:
+        anchor = short_retest
+    else:
+        anchor = stop + .25 * current_atr if direction == "LONG" else stop - .25 * current_atr
+    stop_info = None
+    if bool(cfg.get("structural_stop", True)):
+        placed = structural_stop(closed, direction, entry, current_atr, cfg, anchor)
+        if placed is not None:
+            stop, stop_info = placed
     risk = abs(entry - stop)
     if risk <= 0: return reject("invalid_risk")
     vibe = technical_snapshot(closes)
@@ -180,6 +274,13 @@ def analyze(market: Market, timeframe: str, candles: list[Candle], btc_bullish: 
     reasons, risks = [f"Estrutura confirmada: {setup}",
         (f"Vibe-Trading confirmado: RSI {vibe.rsi:.1f}, MACD histograma "
          f"{vibe.macd_histogram:.6g}, EMA20 {vibe.ema20:.8g}")], []
+    if stop_info:
+        side = "abaixo do suporte" if direction == "LONG" else "acima da resistência"
+        reasons.append(
+            f"Stop estrutural {side} {stop_info['level']:.8g} "
+            f"({stop_info['touches']} defesa(s)), além do pavio mais profundo "
+            f"{stop_info['extreme']:.8g} — folga para caça de stops "
+            f"({stop_info['distance_atr']:.1f} ATR)")
     aligned = trend_up if direction == "LONG" else trend_down
     uses_btc_regime = btc_bullish is not None
     btc_aligned = not uses_btc_regime or ((btc_bullish and direction == "LONG") or (not btc_bullish and direction == "SHORT"))
@@ -271,6 +372,10 @@ def analyze_potential(market: Market, timeframe: str, candles: list[Candle], btc
         scenario = "Possível reação no suporte" if direction == "LONG" else "Possível perda de suporte"
         trigger = support + .25*current_atr if direction == "LONG" else support
         invalid = support-.8*current_atr if direction == "LONG" else support+current_atr
+        if direction == "LONG" and bool(cfg.get("structural_stop", True)):
+            placed = structural_stop(closed, "LONG", trigger, current_atr, cfg, support)
+            if placed is not None:
+                invalid = placed[0]
         target = resistance or (support + 2*current_atr if direction == "LONG" else support-2*current_atr)
         r = ready(last.close-support, not trend_down if direction == "LONG" else trend_down, btc_bullish if direction == "LONG" else not btc_bullish)
         conditions = ([f"Reação compradora e fechamento acima de {trigger:.8g}","Pavio de rejeição ou candle de força","Volume crescente na defesa"] if direction == "LONG" else [f"Fechamento abaixo de {support:.8g}","Volume ≥ 1,5x da média","Reteste do suporte perdido sem recuperação"])

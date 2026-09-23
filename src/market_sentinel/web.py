@@ -27,6 +27,7 @@ from .config import load_settings
 from .explanations import explain_candidate
 from .models import Candle
 from .solana_intel import SolanaIntelService
+from .payments import PaymentError, VipPayments
 from .social import SocialStore, SocialUnavailable
 
 
@@ -45,6 +46,8 @@ class Dashboard:
         self.sentinel = Sentinel(self.settings)
         self.solana_intel = SolanaIntelService(self.sentinel.client)
         self.social = SocialStore(self.sentinel.store)
+        self.vip = VipPayments(self.social)
+        self.user_cache: dict[str, tuple[float, dict | None]] = {}
         secret_source = (os.getenv("SESSION_SECRET") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
                          or os.getenv("DASHBOARD_PASSWORD"))
         self.ephemeral_session_secret = not bool(secret_source)
@@ -178,6 +181,28 @@ def live_resolution(signal: dict, price: float) -> dict | None:
     return None
 
 
+VIP_LOCK_MESSAGE = "Oportunidade qualificada exclusiva para membros VIP"
+
+
+def redact_events(events: list[dict], hidden_ids: set) -> list[dict]:
+    """Keep the audit trail but hide which market an open VIP signal is on."""
+    result = []
+    for event in events:
+        if event.get("signal_id") in hidden_ids:
+            event = {**event, "symbol": "VIP", "venue": "—", "timeframe": "—", "direction": None,
+                     "price": None, "message": VIP_LOCK_MESSAGE, "locked": True}
+        result.append(event)
+    return result
+
+
+SIGNAL_LOG_PREFIXES = ("NOVA OPORTUNIDADE", "ALERTA ")
+
+
+def redact_logs(rows: list[dict]) -> list[dict]:
+    """Operational log lines that name a freshly opened signal are VIP-only."""
+    return [row for row in rows if not str(row.get("message", "")).startswith(SIGNAL_LOG_PREFIXES)]
+
+
 def rolling_sma(values: list[float], period: int) -> list[float | None]:
     result = []
     for index in range(len(values)):
@@ -213,6 +238,37 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             return None
         return {key: user.get(key) for key in (
             "wallet_address", "display_name", "plan", "subscription_status", "current_period_end")}
+
+    def cached_user(address: str) -> dict | None:
+        hit = dashboard.user_cache.get(address)
+        if hit and time.time() - hit[0] < 60:
+            return hit[1]
+        user = dashboard.social.user(address)
+        dashboard.user_cache[address] = (time.time(), user)
+        return user
+
+    def viewer_is_vip(request: Request) -> bool:
+        address = request_wallet(request)
+        if not address:
+            return False
+        try:
+            return dashboard.vip.is_vip(cached_user(address))
+        except SocialUnavailable:
+            return False
+
+    def active_ids() -> set:
+        return {row["id"] for row in dashboard.sentinel.store.signals("ACTIVE", 500)}
+
+    def visible_signals(request: Request, rows: list[dict]) -> list[dict]:
+        if viewer_is_vip(request):
+            return rows
+        return [row for row in rows if row.get("status") != "ACTIVE"]
+
+    def public_user_with_vip(user: dict | None) -> dict | None:
+        data = public_user(user)
+        if data is not None:
+            data["vip"] = dashboard.vip.is_vip(user)
+        return data
 
     def require_wallet(request: Request) -> tuple[str, dict]:
         address = request_wallet(request)
@@ -287,6 +343,15 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     async def solana_intel_js():
         return FileResponse(static_dir / "solana-intel.js", media_type="application/javascript")
 
+    vendor_files = {"solana-web3.iife.min.js", "qrcode-generator.js"}
+
+    @app.get("/static/vendor/{name}", include_in_schema=False)
+    async def vendor_asset(name: str):
+        if name not in vendor_files:
+            raise HTTPException(404, "Arquivo não encontrado")
+        return FileResponse(static_dir / "vendor" / name, media_type="application/javascript",
+                            headers={"Cache-Control": "public, max-age=604800, immutable"})
+
     @app.post("/api/auth/nonce")
     async def wallet_nonce(request: Request):
         try:
@@ -322,7 +387,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
-        response = JSONResponse({"authenticated": True, "user": public_user(user)})
+        dashboard.user_cache.pop(address, None)
+        response = JSONResponse({"authenticated": True, "user": public_user_with_vip(user)})
         secure_setting = os.getenv("SESSION_COOKIE_SECURE", "auto").lower()
         forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
         secure = secure_setting in {"1", "true", "yes"} or (
@@ -341,7 +407,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             user = dashboard.social.user(address)
         except SocialUnavailable as exc:
             raise HTTPException(503, str(exc)) from exc
-        return {"authenticated": bool(user), "user": public_user(user),
+        return {"authenticated": bool(user), "user": public_user_with_vip(user),
                 "session_persistent": not dashboard.ephemeral_session_secret}
 
     @app.post("/api/auth/logout")
@@ -350,18 +416,61 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         response.delete_cookie(session_cookie, path="/")
         return response
 
+    @app.get("/api/vip/config")
+    async def vip_config():
+        return dashboard.vip.public_config()
+
+    @app.get("/api/vip/blockhash")
+    async def vip_blockhash():
+        try:
+            return await asyncio.to_thread(dashboard.vip.latest_blockhash)
+        except PaymentError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @app.post("/api/vip/intent")
+    async def vip_intent(request: Request):
+        address, _ = require_wallet(request)
+        try:
+            return dashboard.vip.create_intent(address)
+        except PaymentError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/api/vip/verify")
+    async def vip_verify(request: Request):
+        address, _ = require_wallet(request)
+        try:
+            payload = await request.json()
+            reference = str(payload.get("reference") or "").strip()
+            signature = str(payload.get("signature") or "").strip() or None
+            if not reference:
+                raise PaymentError("Referência do pagamento ausente")
+            result = await asyncio.to_thread(dashboard.vip.verify, address, reference, signature)
+        except (PaymentError, TypeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if result.get("status") == "paid":
+            dashboard.user_cache.pop(address, None)
+            result["user"] = public_user_with_vip(result.get("user"))
+        return result
+
     @app.get("/api/chat/messages")
     async def chat_messages(request: Request, after_id: int = 0, limit: int = 100):
         address, _ = require_wallet(request)
         try:
             rows = dashboard.social.messages(after_id, limit)
+            owners = dashboard.social.users(row["wallet_address"] for row in rows)
         except SocialUnavailable as exc:
             raise HTTPException(503, str(exc)) from exc
-        return {"messages": [{**row, "mine": row["wallet_address"] == address} for row in rows]}
+        return {"messages": [{**row, "mine": row["wallet_address"] == address,
+                              "vip": dashboard.vip.is_vip(owners.get(row["wallet_address"]))}
+                             for row in rows]}
 
     @app.post("/api/chat/messages")
     async def send_chat_message(request: Request):
-        address, _ = require_wallet(request)
+        address, user = require_wallet(request)
         try:
             payload = await request.json()
             message = dashboard.social.add_message(address, payload.get("body", ""))
@@ -369,7 +478,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
         except SocialUnavailable as exc:
             raise HTTPException(503, str(exc)) from exc
-        return {**message, "mine": True}
+        return {**message, "mine": True, "vip": dashboard.vip.is_vip(user)}
 
     def status_payload():
         classes = {}
@@ -412,13 +521,14 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         return {"stopped": await dashboard.stop(), "running": dashboard.running}
 
     @app.post("/api/scan")
-    async def scan():
+    async def scan(request: Request):
         require_writer()
         await dashboard.scan()
-        return dashboard.sentinel.store.signals("ACTIVE")
+        return visible_signals(request, dashboard.sentinel.store.signals("ACTIVE"))
 
     @app.get("/api/opportunities")
-    async def opportunities(): return dashboard.sentinel.store.signals("ACTIVE")
+    async def opportunities(request: Request):
+        return visible_signals(request, dashboard.sentinel.store.signals("ACTIVE"))
 
     @app.get("/api/candidates")
     async def candidates(): return dashboard.sentinel.store.candidates()
@@ -462,7 +572,19 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/live-prices")
-    async def live_prices():
+    async def live_prices(request: Request):
+        data = await compute_live_prices()
+        if viewer_is_vip(request):
+            return data
+        # Non-VIPs must not learn which markets hold an open qualified signal.
+        candidate_keys = {f"{x['venue']}:{x['symbol']}" for x in dashboard.sentinel.store.candidates()}
+        public = {key: value for key, value in data.items()
+                  if key.startswith("__") or key in candidate_keys}
+        public["__resolutions"] = []
+        public["__active_ids"] = []
+        return public
+
+    async def compute_live_prices():
         """Latest forming-candle price for cards; cached to protect venue APIs."""
         if time.time() - dashboard.price_cache_at < 4:
             return dashboard.price_cache
@@ -511,39 +633,51 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         return dashboard.price_cache
 
     @app.get("/api/signals")
-    async def signals(status: str | None = None, limit: int = 200):
-        return dashboard.sentinel.store.signals(status, min(limit, 500))
+    async def signals(request: Request, status: str | None = None, limit: int = 200):
+        return visible_signals(request, dashboard.sentinel.store.signals(status, min(limit, 500)))
+
+    def visible_events(request: Request, limit: int) -> list[dict]:
+        events = dashboard.sentinel.store.events(limit)
+        return events if viewer_is_vip(request) else redact_events(events, active_ids())
 
     @app.get("/api/signal-events")
-    async def signal_events(limit: int = 300):
-        return dashboard.sentinel.store.events(min(limit, 500))
+    async def signal_events(request: Request, limit: int = 300):
+        return visible_events(request, min(limit, 500))
 
     @app.get("/api/dashboard-snapshot")
-    async def dashboard_snapshot():
+    async def dashboard_snapshot(request: Request):
         """One coherent lifecycle view; avoids mixing serverless instances."""
         return {
             "version": dashboard.sentinel.store.snapshot_updated_at() or 0,
             "lifecycle": dashboard.sentinel.store.signal_stats(),
-            "signals": dashboard.sentinel.store.signals(limit=200),
-            "events": dashboard.sentinel.store.events(300),
+            "signals": visible_signals(request, dashboard.sentinel.store.signals(limit=200)),
+            "events": visible_events(request, 300),
         }
 
     @app.get("/api/dashboard-state")
-    async def dashboard_state():
+    async def dashboard_state(request: Request):
         """All non-price dashboard data from one process and one DB snapshot."""
+        vip = viewer_is_vip(request)
+        active = dashboard.sentinel.store.signals("ACTIVE", 200)
         return {
             "version": dashboard.sentinel.store.snapshot_updated_at() or 0,
             "status": status_payload(),
-            "opportunities": dashboard.sentinel.store.signals("ACTIVE", 200),
+            "vip": vip,
+            "opportunities_locked": not vip,
+            "opportunity_count": len(active),
+            "opportunities": active if vip else [],
             "candidates": dashboard.sentinel.store.candidates(),
-            "events": dashboard.sentinel.store.events(300),
-            "logs": dashboard.sentinel.store.operational_logs(300),
+            "events": visible_events(request, 300),
+            "logs": (dashboard.sentinel.store.operational_logs(300) if vip
+                     else redact_logs(dashboard.sentinel.store.operational_logs(300))),
         }
 
     @app.get("/api/signals/{signal_id}/chart")
-    async def signal_chart(signal_id: int):
+    async def signal_chart(signal_id: int, request: Request):
         signal = dashboard.sentinel.store.signal(signal_id)
         if not signal: raise HTTPException(404, "Oportunidade não encontrada")
+        if signal.get("status") == "ACTIVE" and not viewer_is_vip(request):
+            raise HTTPException(403, "Oportunidade qualificada exclusiva para membros VIP")
         match = next(((a, m) for a, m in dashboard.sentinel.markets
                       if m.venue == signal["venue"] and m.symbol == signal["symbol"]), None)
         if not match:
@@ -610,7 +744,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 for _, m in dashboard.sentinel.markets]
 
     @app.get("/api/logs")
-    async def logs(): return dashboard.sentinel.store.operational_logs(300)
+    async def logs(request: Request):
+        rows = dashboard.sentinel.store.operational_logs(300)
+        return rows if viewer_is_vip(request) else redact_logs(rows)
 
     return app
 

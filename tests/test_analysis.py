@@ -183,3 +183,50 @@ def test_analyze_reaches_pullback_path_only_when_enabled():
     # (here vibe rejects it); disabling it falls straight back to no setup.
     assert enabled["reason"] != "no_confirmed_setup"
     assert disabled["reason"] == "no_confirmed_setup"
+
+
+from market_sentinel.analysis import structural_stop
+
+
+def _support_series():
+    """Range with a support at ~100 that was swept twice (wicks to 99.2/99.4)."""
+    rows = []
+    for i in range(60):
+        base = 103.5 + (i % 5) * .3          # lows stay >= 102.9, no stray pivots near 100
+        rows.append(Candle(i, base, base + .6, base - .6, base + .1, 100))
+    rows[20] = Candle(20, 101, 101.5, 100.0, 101.2, 150)   # support pivot
+    rows[32] = Candle(32, 101, 101.4, 99.2, 100.8, 180)    # sweep below, closes back above
+    rows[44] = Candle(44, 101, 101.6, 99.4, 101.0, 160)    # another sweep
+    return rows
+
+
+def test_long_stop_goes_below_the_deepest_sweep_of_support():
+    rows = _support_series()
+    placed = structural_stop(rows, "LONG", 102.0, 1.0, {"pivot_window": 3}, anchor=100.0)
+    assert placed is not None
+    stop, info = placed
+    assert stop < 99.2          # below the deepest wick, not on the level
+    assert stop == 99.2 - .3    # buffer = 0.3 ATR
+    assert info["touches"] >= 2
+
+
+def test_stop_respects_minimum_distance():
+    rows = _support_series()
+    placed = structural_stop(rows, "LONG", 99.9, 1.0, {"pivot_window": 3, "min_stop_atr": 2.0},
+                             anchor=99.5)
+    assert placed is not None
+    assert abs((99.9 - placed[0]) - 2.0) < 1e-9
+
+
+def test_stop_falls_back_when_support_is_too_far():
+    rows = _support_series()
+    assert structural_stop(rows, "LONG", 120.0, 1.0, {"pivot_window": 3, "max_stop_atr": 2}) is None
+
+
+def test_short_stop_goes_above_resistance_sweeps():
+    rows = [Candle(i, 96 - (i % 5) * .3, 96.6 - (i % 5) * .3, 95.4 - (i % 5) * .3,
+                   95.9 - (i % 5) * .3, 100) for i in range(40)]
+    rows[15] = Candle(15, 99, 100.0, 98.5, 98.8, 120)
+    rows[25] = Candle(25, 99, 100.7, 98.5, 99.1, 140)     # sweep above 100, closes below
+    placed = structural_stop(rows, "SHORT", 98.0, 1.0, {"pivot_window": 3}, anchor=100.0)
+    assert placed is not None and placed[0] >= 100.7 + .3 - 1e-9

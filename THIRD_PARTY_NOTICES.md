@@ -28,3 +28,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## @solana/web3.js 1.98.0 and qrcode-generator 1.4.4
+
+`src/market_sentinel/static/vendor/solana-web3.iife.min.js` is the unmodified
+browser build of [@solana/web3.js](https://github.com/solana-labs/solana-web3.js)
+(MIT License, Copyright (c) 2023 Solana Labs, Inc.) and
+`src/market_sentinel/static/vendor/qrcode-generator.js` is
+[qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
+(MIT License, Copyright (c) 2009 Kazuhiko Arase). Both are loaded only when a
+user opens the VIP payment flow.

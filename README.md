@@ -183,6 +183,43 @@ As tabelas de usuários já incluem `plan`, `subscription_status`, provedor, cli
 período. Esses campos deixam a base pronta para a futura cobrança mensal, mas nenhum pagamento é
 processado nesta versão.
 
+## Acesso VIP (10 USDC na Solana)
+
+As **oportunidades qualificadas abertas** ficam ocultas para quem não é VIP: a
+API devolve apenas a quantidade (`opportunity_count`), os eventos dessas
+oportunidades aparecem como `VIP` sem ativo/preço, o gráfico responde 403 e os
+preços ao vivo/log de novas oportunidades não revelam o ativo. Histórico de
+oportunidades encerradas e cenários em preparação continuam públicos.
+
+Fluxo de pagamento (Solana Pay, sem custódia):
+
+1. O usuário entra com a carteira EVM (assinatura gratuita, como no chat).
+2. `POST /api/vip/intent` gera uma `reference` aleatória + memo `MS-VIP-XXXX`.
+3. O usuário paga `VIP_PRICE_USDC` USDC para `VIP_TREASURY_WALLET` pelo botão
+   Phantom/Solflare, pelo QR code ou pelo link `solana:` (apps mobile).
+4. A página consulta `POST /api/vip/verify` a cada 6 s. O backend localiza a
+   transação pela `reference` (ou pela assinatura colada), confere na rede que
+   ela não falhou, contém a referência/memo do pedido e aumentou em pelo menos
+   10 USDC o saldo da tesouraria. Cada assinatura libera um único período.
+5. O VIP vale `VIP_DAYS` (31) dias; renovações somam ao tempo restante.
+
+Configuração: defina `VIP_TREASURY_WALLET` (e opcionalmente `SOLANA_RPC_URL`,
+`VIP_ADMIN_WALLETS`) no Vercel e aplique novamente `supabase_social.sql`, que cria
+a tabela `sentinel_vip_payments`. Sem `VIP_TREASURY_WALLET` o botão informa que os
+pagamentos ainda não estão ativos. Observação: os alertas do Telegram continuam
+indo para o chat configurado em `TELEGRAM_CHAT_ID`.
+
+## Stop estrutural
+
+O stop não fica mais a um ATR fixo da entrada. `structural_stop` agrupa os
+pivôs em zonas de suporte (LONG) ou resistência (SHORT), prioriza a zona mais
+próxima que já foi defendida pelo menos duas vezes e coloca o stop **abaixo do
+pavio mais profundo que já varreu essa zona e fechou de volta**, mais
+`stop_buffer_atr` (0,3 ATR). Assim, o mergulho típico que testa o suporte e
+volta não aciona o stop. Limites: mínimo `min_stop_atr` (0,8) e máximo
+`max_stop_atr` (3,5); se nenhuma zona couber, vale o stop anterior. Os alvos
+Fibonacci continuam medidos a partir da distância entrada→stop.
+
 ## Aprendizado diário auditável
 
 O primeiro ciclo após a virada do dia em `America/Sao_Paulo` avalia apenas sinais já

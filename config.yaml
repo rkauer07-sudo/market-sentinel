@@ -32,6 +32,14 @@ analysis:
   enable_pullback_continuation: true
   pullback_zone_atr: 0.6
   pullback_lookback: 3
+  # Stop estrutural: abaixo do suporte (LONG) / acima da resistência (SHORT),
+  # além do pavio mais profundo que já varreu a zona, com folga em ATR.
+  structural_stop: true
+  stop_buffer_atr: 0.3
+  min_stop_atr: 0.8
+  max_stop_atr: 3.5
+  stop_min_touches: 2
+  stop_lookback: 120
   alert_cooldown_hours: 12
 runtime:
   scan_interval_seconds: 60

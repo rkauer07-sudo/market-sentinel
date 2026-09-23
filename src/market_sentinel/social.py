@@ -44,6 +44,12 @@ class SocialStore:
           FOREIGN KEY(wallet_address) REFERENCES users(wallet_address)
         );
         CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(id DESC);
+        CREATE TABLE IF NOT EXISTS vip_payments (
+          reference TEXT PRIMARY KEY, wallet_address TEXT NOT NULL, memo TEXT NOT NULL,
+          amount_usdc REAL NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending', signature TEXT UNIQUE, paid_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_vip_payments_wallet ON vip_payments(wallet_address, created_at DESC);
         """)
         self.store.db.commit()
 
@@ -146,6 +152,23 @@ class SocialStore:
                                     (address,)).fetchone()
         return dict(zip(fields, row)) if row else None
 
+    def users(self, addresses) -> dict[str, dict]:
+        """Batch lookup used to decorate chat messages (VIP highlight)."""
+        addresses = sorted({str(a) for a in addresses if a})
+        if not addresses:
+            return {}
+        fields = ("wallet_address", "plan", "current_period_end")
+        if self.remote:
+            rows = self._request("GET", "sentinel_users", params={
+                "select": ",".join(fields),
+                "wallet_address": f"in.({','.join(addresses)})"}) or []
+            return {row["wallet_address"]: row for row in rows}
+        marks = ",".join("?" * len(addresses))
+        rows = self.store.db.execute(
+            f"SELECT {','.join(fields)} FROM users WHERE wallet_address IN ({marks})",
+            tuple(addresses)).fetchall()
+        return {row[0]: dict(zip(fields, row)) for row in rows}
+
     def messages(self, after_id: int = 0, limit: int = 100) -> list[dict]:
         limit = max(1, min(int(limit), 100))
         if self.remote:
@@ -183,3 +206,73 @@ class SocialStore:
             VALUES(?,?,?)""", (address, body, now))
         self.store.db.commit()
         return {"id": cursor.lastrowid, "wallet_address": address, "body": body, "created_at": now}
+
+    # ------------------------------------------------------------ VIP payments
+    _payment_fields = ("reference", "wallet_address", "memo", "amount_usdc", "created_at",
+                       "expires_at", "status", "signature", "paid_at")
+
+    def save_payment_intent(self, intent: dict) -> None:
+        row = {key: intent.get(key) for key in self._payment_fields}
+        if self.remote:
+            self._request("POST", "sentinel_vip_payments", payload=row, prefer="return=minimal")
+            return
+        self.store.db.execute(
+            f"INSERT INTO vip_payments({','.join(self._payment_fields)}) VALUES({','.join('?' * len(row))})",
+            tuple(row.values()))
+        self.store.db.commit()
+
+    def _payment_where(self, column: str, value: str) -> dict | None:
+        if self.remote:
+            rows = self._request("GET", "sentinel_vip_payments", params={
+                "select": ",".join(self._payment_fields), column: f"eq.{value}", "limit": "1"})
+            return rows[0] if rows else None
+        row = self.store.db.execute(
+            f"SELECT {','.join(self._payment_fields)} FROM vip_payments WHERE {column}=?",
+            (value,)).fetchone()
+        return dict(zip(self._payment_fields, row)) if row else None
+
+    def payment_intent(self, reference: str) -> dict | None:
+        return self._payment_where("reference", reference)
+
+    def payment_by_signature(self, signature: str) -> dict | None:
+        return self._payment_where("signature", signature)
+
+    def mark_payment_paid(self, reference: str, signature: str, paid_at: int) -> bool:
+        """Atomically flip pending -> paid; the UNIQUE signature blocks reuse."""
+        if self.remote:
+            try:
+                rows = self._request("PATCH", "sentinel_vip_payments", params={
+                    "reference": f"eq.{reference}", "status": "eq.pending"},
+                    payload={"status": "paid", "signature": signature, "paid_at": paid_at},
+                    prefer="return=representation")
+            except SocialUnavailable as exc:
+                if "23505" in str(exc) or "duplicate" in str(exc).lower():
+                    return False
+                raise
+            return bool(rows)
+        try:
+            cursor = self.store.db.execute(
+                "UPDATE vip_payments SET status='paid', signature=?, paid_at=? "
+                "WHERE reference=? AND status='pending'", (signature, paid_at, reference))
+        except Exception as exc:  # sqlite3 / libsql IntegrityError
+            if "UNIQUE" in str(exc).upper():
+                return False
+            raise
+        self.store.db.commit()
+        return cursor.rowcount == 1
+
+    def extend_vip(self, address: str, seconds: int) -> dict:
+        now = int(time.time())
+        current = self.user(address) or {}
+        start = max(now, int(current.get("current_period_end") or 0))
+        fields = {"plan": "vip", "subscription_status": "active",
+                  "subscription_provider": "solana_usdc", "current_period_end": start + seconds}
+        if self.remote:
+            rows = self._request("PATCH", "sentinel_users", params={
+                "wallet_address": f"eq.{address}"}, payload=fields, prefer="return=representation")
+            return rows[0] if rows else {**current, **fields}
+        self.store.db.execute(
+            "UPDATE users SET plan=?, subscription_status=?, subscription_provider=?, "
+            "current_period_end=? WHERE wallet_address=?", (*fields.values(), address))
+        self.store.db.commit()
+        return self.user(address) or {**current, **fields}
