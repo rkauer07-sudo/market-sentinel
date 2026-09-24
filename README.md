@@ -169,19 +169,14 @@ Para ativar os alertas no worker, adicione também `HELIUS_API_KEY`,
 
 ## Login Web3 e chat
 
-O painel aceita login por carteira compatível com `personal_sign` (MetaMask, Rabby e similares).
-A assinatura serve apenas para provar a posse do endereço: ela não cria transação, não pede chave
-privada e não concede acesso aos fundos. A sessão fica em cookie `HttpOnly` assinado.
+O login é feito **somente com carteira Solana** (Phantom, Solflare ou Backpack) via `signMessage`.
+O backend confere a assinatura Ed25519 (PyNaCl). A assinatura serve apenas para provar a posse
+do endereço: não cria transação, não pede chave privada e não concede acesso aos fundos. A sessão
+fica em cookie `HttpOnly` assinado com `SESSION_SECRET` (obrigatória em produção).
 
-Em SQLite/Render, usuários e mensagens são criados automaticamente. No modo Vercel + Supabase:
-
-1. Execute [`supabase_social.sql`](supabase_social.sql) uma vez no SQL Editor do Supabase.
-2. Configure `SESSION_SECRET` com um valor longo e aleatório na Vercel e no worker web.
-3. Mantenha `SUPABASE_SERVICE_ROLE_KEY` apenas no backend; ela nunca deve ir para o JavaScript.
-
-As tabelas de usuários já incluem `plan`, `subscription_status`, provedor, cliente externo e fim do
-período. Esses campos deixam a base pronta para a futura cobrança mensal, mas nenhum pagamento é
-processado nesta versão.
+Usuários, desafios de login, mensagens do chat e pagamentos VIP ficam no mesmo banco do mercado
+(Turso, ou SQLite local em desenvolvimento) e as tabelas são criadas automaticamente. Mensagens de
+membros VIP aparecem destacadas no chat.
 
 ## Acesso VIP (10 USDC na Solana)
 
@@ -193,7 +188,7 @@ oportunidades encerradas e cenários em preparação continuam públicos.
 
 Fluxo de pagamento (Solana Pay, sem custódia):
 
-1. O usuário entra com a carteira EVM (assinatura gratuita, como no chat).
+1. O usuário entra com a carteira Solana (assinatura gratuita, como no chat).
 2. `POST /api/vip/intent` gera uma `reference` aleatória + memo `MS-VIP-XXXX`.
 3. O usuário paga `VIP_PRICE_USDC` USDC para `VIP_TREASURY_WALLET` pelo botão
    Phantom/Solflare, pelo QR code ou pelo link `solana:` (apps mobile).

@@ -5,7 +5,7 @@ from market_sentinel.social import SocialStore
 from market_sentinel.storage import Store
 
 
-ADDRESS = "0x1111111111111111111111111111111111111111"
+ADDRESS = "Bow1CGKGDB9mNxeWdw85E2aCthQ1oZX4oFEe7fYT17ew"
 
 
 def test_signed_session_rejects_tampering():

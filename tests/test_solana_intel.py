@@ -519,7 +519,8 @@ def test_solana_intel_web_endpoints(tmp_path, monkeypatch):
         assert route == {"mint": MINT_A, "amount_sol": 0.5, "read_only": True}
         dashboard = client.get("/")
         assert dashboard.status_code == 200
-        assert 'href="/memecoins-analyser"' in dashboard.text
+        assert "Memecoins Analyser<small>em breve</small>" in dashboard.text
+        assert 'href="/memecoins-analyser"' not in dashboard.text
         assert 'id="solana-intel"' not in dashboard.text
         analyser = client.get("/memecoins-analyser")
         assert analyser.status_code == 200

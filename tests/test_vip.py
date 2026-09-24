@@ -8,8 +8,8 @@ from market_sentinel.models import AssetClass, Market, Opportunity
 from market_sentinel.payments import USDC_MINT, b58decode, b58encode
 from market_sentinel.web import create_app
 
-ADDRESS = "0x3333333333333333333333333333333333333333"
-OTHER = "0x4444444444444444444444444444444444444444"
+ADDRESS = "2btLJAAb1S3x6hZYdVyAePjqtQYi2ZBSRGy4569RZu8h"
+OTHER = "FVdnakemjhcemfWUgNR2AERbk5Pog7zJ1UF2LjbocBUj"
 TREASURY = b58encode(bytes(range(1, 33)))
 
 

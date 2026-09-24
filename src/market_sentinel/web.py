@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from . import __version__
 from .app import Sentinel
 from .analysis import pivots
-from .auth import create_session, new_wallet_challenge, normalize_address, read_session, recover_address
+from .auth import create_session, new_wallet_challenge, normalize_address, read_session, verify_signature
 from .config import load_settings
 from .explanations import explain_candidate
 from .models import Candle
@@ -319,7 +319,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     def require_writer():
         """Only the scheduled worker may mutate the authoritative snapshot."""
         store = dashboard.sentinel.store
-        if store.remote_url and store.remote_key and not store.upload_remote:
+        web_writer = os.getenv("SENTINEL_WEB_WRITER", "false").lower() in {"1", "true", "yes"}
+        if store.turso_url and not store.remote_error and not web_writer:
             raise HTTPException(409, "Monitor gerenciado pela rotina central; painel em modo somente leitura")
 
     @app.get("/health", include_in_schema=False)
@@ -342,6 +343,12 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     @app.get("/static/solana-intel.js", include_in_schema=False)
     async def solana_intel_js():
         return FileResponse(static_dir / "solana-intel.js", media_type="application/javascript")
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        return FileResponse(static_dir / "favicon.svg", media_type="image/svg+xml",
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     vendor_files = {"solana-web3.iife.min.js", "qrcode-generator.js"}
 
@@ -378,7 +385,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             message = dashboard.social.challenge_message(address, nonce)
             if not message:
                 raise ValueError("Desafio expirado ou já utilizado")
-            if recover_address(message, signature) != address:
+            if not verify_signature(address, message, signature):
                 raise ValueError("A assinatura não corresponde à carteira informada")
             if not dashboard.social.consume_challenge(address, nonce):
                 raise ValueError("Desafio expirado ou já utilizado")
@@ -488,8 +495,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         if not classes and latest_run:
             classes = latest_run.get("diagnostics", {}).get("classes", {})
         lifecycle = dashboard.sentinel.store.signal_stats()
-        scheduled = bool(not dashboard.running and dashboard.sentinel.store.remote_url
-                         and dashboard.sentinel.store.remote_key and not dashboard.sentinel.store.remote_error)
+        # O worker agendado (GitHub Actions) grava no Turso; a web só lê.
+        scheduled = bool(not dashboard.running and dashboard.sentinel.store.turso_url
+                         and not dashboard.sentinel.store.remote_error)
         last_scan_at = dashboard.sentinel.store.snapshot_updated_at() or (
             latest_run.get("finished_at") if latest_run else None)
         return {"running": dashboard.running, "scanning": dashboard.scan_lock.locked(),

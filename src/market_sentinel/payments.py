@@ -71,7 +71,8 @@ class PaymentError(ValueError):
 class VipPayments:
     def __init__(self, social):
         self.social = social
-        self.treasury = os.getenv("VIP_TREASURY_WALLET", "").strip()
+        # Tolera espaços/aspas coladas por engano no painel do Vercel.
+        self.treasury = os.getenv("VIP_TREASURY_WALLET", "").strip().strip("'\"").strip()
         self.price = float(os.getenv("VIP_PRICE_USDC", "10"))
         self.days = int(os.getenv("VIP_DAYS", "31"))
         self.mint = os.getenv("VIP_USDC_MINT", USDC_MINT).strip()
@@ -81,7 +82,7 @@ class VipPayments:
         self.rpc_url = os.getenv("SOLANA_RPC_URL", "").strip() or default_rpc
         self.intent_ttl = int(os.getenv("VIP_INTENT_TTL_SECONDS", str(24 * 3600)))
         admins = os.getenv("VIP_ADMIN_WALLETS", "")
-        self.admin_wallets = {x.strip().lower() for x in admins.split(",") if x.strip()}
+        self.admin_wallets = {x.strip() for x in admins.split(",") if x.strip()}
 
     # ------------------------------------------------------------------ config
     @property
@@ -92,15 +93,26 @@ class VipPayments:
     def amount_units(self) -> int:
         return int(round(self.price * 10 ** USDC_DECIMALS))
 
+    @property
+    def disabled_reason(self) -> str | None:
+        if self.enabled:
+            return None
+        if not self.treasury:
+            return "A variável VIP_TREASURY_WALLET não chegou ao servidor (ausente ou sem redeploy)."
+        if self.treasury.startswith("0x"):
+            return "VIP_TREASURY_WALLET contém um endereço EVM (0x…); use um endereço Solana."
+        return "VIP_TREASURY_WALLET não é um endereço Solana válido."
+
     def public_config(self) -> dict:
-        return {"enabled": self.enabled, "price_usdc": self.price, "days": self.days,
+        return {"enabled": self.enabled, "reason": self.disabled_reason,
+                "price_usdc": self.price, "days": self.days,
                 "treasury": self.treasury if self.enabled else None, "mint": self.mint,
                 "network": "solana"}
 
     def is_vip(self, user: dict | None) -> bool:
         if not user:
             return False
-        if str(user.get("wallet_address", "")).lower() in self.admin_wallets:
+        if str(user.get("wallet_address", "")) in self.admin_wallets:
             return True
         end = int(user.get("current_period_end") or 0)
         return user.get("plan") == "vip" and end > int(time.time())

@@ -120,11 +120,13 @@ class SocialStore:
                 "used_at": "is.null", "expires_at": f"gt.{now}",
             }, payload={"used_at": now}, prefer="return=representation")
             return bool(rows)
-        cursor = self.store.db.execute("""UPDATE auth_nonces SET used_at=? WHERE nonce_hash=?
+        self.store.db.execute("""UPDATE auth_nonces SET used_at=? WHERE nonce_hash=?
             AND wallet_address=? AND used_at IS NULL AND expires_at>?""",
             (now, nonce_hash, address, now))
+        # changes() é portável entre sqlite3 e libsql/Turso (rowcount não é).
+        changed = self.store.db.execute("SELECT changes()").fetchone()[0]
         self.store.db.commit()
-        return cursor.rowcount == 1
+        return changed == 1
 
     def upsert_user(self, address: str) -> dict:
         now = int(time.time())
@@ -202,10 +204,11 @@ class SocialStore:
             WHERE wallet_address=? ORDER BY id DESC LIMIT 1""", (address,)).fetchone()
         if recent and now - int(recent[0]) < 2:
             raise ValueError("Aguarde dois segundos antes de enviar outra mensagem")
-        cursor = self.store.db.execute("""INSERT INTO chat_messages(wallet_address,body,created_at)
+        self.store.db.execute("""INSERT INTO chat_messages(wallet_address,body,created_at)
             VALUES(?,?,?)""", (address, body, now))
+        message_id = int(self.store.db.execute("SELECT last_insert_rowid()").fetchone()[0])
         self.store.db.commit()
-        return {"id": cursor.lastrowid, "wallet_address": address, "body": body, "created_at": now}
+        return {"id": message_id, "wallet_address": address, "body": body, "created_at": now}
 
     # ------------------------------------------------------------ VIP payments
     _payment_fields = ("reference", "wallet_address", "memo", "amount_usdc", "created_at",
@@ -251,15 +254,16 @@ class SocialStore:
                 raise
             return bool(rows)
         try:
-            cursor = self.store.db.execute(
+            self.store.db.execute(
                 "UPDATE vip_payments SET status='paid', signature=?, paid_at=? "
                 "WHERE reference=? AND status='pending'", (signature, paid_at, reference))
         except Exception as exc:  # sqlite3 / libsql IntegrityError
             if "UNIQUE" in str(exc).upper():
                 return False
             raise
+        changed = self.store.db.execute("SELECT changes()").fetchone()[0]
         self.store.db.commit()
-        return cursor.rowcount == 1
+        return changed == 1
 
     def extend_vip(self, address: str, seconds: int) -> dict:
         now = int(time.time())

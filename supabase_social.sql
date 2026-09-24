@@ -1,7 +1,7 @@
 -- Execute uma vez no SQL Editor do Supabase. O navegador nunca acessa estas
 -- tabelas diretamente; somente a API do Market Sentinel usa a service role.
 create table if not exists public.sentinel_users (
-  wallet_address text primary key check (wallet_address ~ '^0x[0-9a-f]{40}$'),
+  wallet_address text primary key check (wallet_address ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'),
   display_name text,
   plan text not null default 'free',
   subscription_status text not null default 'inactive',

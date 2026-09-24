@@ -9,14 +9,24 @@ import secrets
 import time
 
 
-ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+ADDRESS_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+
+
+def _b58decode(value: str) -> bytes:
+    number = 0
+    for char in value:
+        number = number * 58 + _B58.index(char)
+    body = number.to_bytes((number.bit_length() + 7) // 8, "big") if number else b""
+    return b"\0" * (len(value) - len(value.lstrip("1"))) + body
 
 
 def normalize_address(value: str) -> str:
+    """Solana public key (base58, 32 bytes). Base58 is case-sensitive."""
     value = str(value or "").strip()
-    if not ADDRESS_RE.fullmatch(value):
-        raise ValueError("Endereço de carteira inválido")
-    return value.lower()
+    if not ADDRESS_RE.fullmatch(value) or len(_b58decode(value)) != 32:
+        raise ValueError("Endereço de carteira Solana inválido")
+    return value
 
 
 def new_wallet_challenge(address: str, host: str) -> tuple[str, str, int]:
@@ -32,14 +42,38 @@ def new_wallet_challenge(address: str, host: str) -> tuple[str, str, int]:
     return nonce, message, expires_at
 
 
-def recover_address(message: str, signature: str) -> str:
+def _signature_bytes(signature: str) -> bytes:
+    signature = str(signature or "").strip()
+    if re.fullmatch(r"(0x)?[0-9a-fA-F]{128}", signature):
+        return bytes.fromhex(signature.removeprefix("0x"))
     try:
-        from eth_account import Account
-        from eth_account.messages import encode_defunct
+        raw = _b58decode(signature)
+    except ValueError:
+        raw = b""
+    if len(raw) == 64:
+        return raw
+    try:
+        raw = base64.b64decode(signature, validate=True)
+    except (ValueError, TypeError):
+        raw = b""
+    if len(raw) != 64:
+        raise ValueError("Assinatura em formato inválido")
+    return raw
+
+
+def verify_signature(address: str, message: str, signature: str) -> bool:
+    """Ed25519 check of a Solana wallet `signMessage` over the UTF-8 text."""
+    try:
+        from nacl.exceptions import BadSignatureError
+        from nacl.signing import VerifyKey
     except ImportError as exc:  # pragma: no cover - dependency guard for partial installs
-        raise RuntimeError("Dependência Web3 não instalada") from exc
-    recovered = Account.recover_message(encode_defunct(text=message), signature=signature)
-    return normalize_address(recovered)
+        raise RuntimeError("Dependência PyNaCl não instalada") from exc
+    try:
+        VerifyKey(_b58decode(normalize_address(address))).verify(
+            message.encode("utf-8"), _signature_bytes(signature))
+        return True
+    except (BadSignatureError, ValueError):
+        return False
 
 
 def create_session(address: str, secret: str, max_age: int = 30 * 24 * 3600) -> str:
