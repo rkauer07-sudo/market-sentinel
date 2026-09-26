@@ -181,6 +181,7 @@ def live_resolution(signal: dict, price: float) -> dict | None:
     return None
 
 
+DEFAULT_OWNER_WALLET = "GVMPqSU3KZTKa58cKLZreZx46rTWVLhEWXJ7DdebDKH8"
 VIP_LOCK_MESSAGE = "Oportunidade qualificada exclusiva para membros VIP"
 
 
@@ -264,11 +265,26 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             return rows
         return [row for row in rows if row.get("status") != "ACTIVE"]
 
+    owner_wallets = {x.strip() for x in os.getenv("FEEDBACK_ADMIN_WALLETS", DEFAULT_OWNER_WALLET).split(",")
+                     if x.strip()}
+
     def public_user_with_vip(user: dict | None) -> dict | None:
         data = public_user(user)
         if data is not None:
             data["vip"] = dashboard.vip.is_vip(user)
+            data["is_owner"] = data.get("wallet_address") in owner_wallets
         return data
+
+    def require_owner(request: Request) -> str:
+        address = request_wallet(request)
+        if not address or address not in owner_wallets:
+            raise HTTPException(403, "Área restrita à carteira principal")
+        return address
+
+    def client_hash(request: Request) -> str:
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        ip = forwarded or (request.client.host if request.client else "unknown")
+        return hashlib.sha256(f"{dashboard.session_secret}:{ip}".encode()).hexdigest()[:32]
 
     def require_wallet(request: Request) -> tuple[str, dict]:
         address = request_wallet(request)
@@ -282,8 +298,17 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             raise HTTPException(401, "Sessão não corresponde a um usuário ativo")
         return address, user
 
+    canonical_host = os.getenv("CANONICAL_HOST", "").strip().lower()
+    redirect_hosts = {h.strip().lower() for h in os.getenv("REDIRECT_HOSTS", "").split(",") if h.strip()}
+
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
+        host = request.headers.get("host", "").split(":")[0].lower()
+        if (canonical_host and host in redirect_hosts and host != canonical_host
+                and request.url.path != "/api/solana-intel/helius"):
+            query = f"?{request.url.query}" if request.url.query else ""
+            return Response(status_code=308,
+                            headers={"Location": f"https://{canonical_host}{request.url.path}{query}"})
         if request.url.path == "/api/solana-intel/helius":
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
@@ -438,7 +463,16 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     async def vip_intent(request: Request):
         address, _ = require_wallet(request)
         try:
-            return dashboard.vip.create_intent(address)
+            try:
+                payload = await request.json()
+            except ValueError:
+                payload = {}
+            code = str((payload or {}).get("code") or "").strip() or None
+            result = dashboard.vip.create_intent(address, code)
+            if result.get("status") == "paid":
+                dashboard.user_cache.pop(address, None)
+                result["user"] = public_user_with_vip(result.get("user"))
+            return result
         except PaymentError as exc:
             raise HTTPException(400, str(exc)) from exc
         except SocialUnavailable as exc:
@@ -462,6 +496,42 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             dashboard.user_cache.pop(address, None)
             result["user"] = public_user_with_vip(result.get("user"))
         return result
+
+    @app.post("/api/feedback")
+    async def send_feedback(request: Request):
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise HTTPException(400, "Envie um JSON válido")
+        if str(payload.get("website") or "").strip():  # honeypot anti-bot
+            return {"ok": True}
+        try:
+            saved = dashboard.social.add_feedback(payload.get("body"), payload.get("contact"),
+                                                  request_wallet(request), client_hash(request))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"ok": True, **saved}
+
+    @app.get("/api/feedback")
+    async def list_feedback(request: Request, limit: int = 200):
+        require_owner(request)
+        try:
+            rows = dashboard.social.feedback(limit)
+        except SocialUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"messages": rows, "unread": sum(1 for r in rows if not r["read_at"])}
+
+    @app.post("/api/feedback/{message_id}/read")
+    async def read_feedback(message_id: int, request: Request):
+        require_owner(request)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        dashboard.social.mark_feedback_read(message_id, bool((payload or {}).get("read", True)))
+        return {"ok": True}
 
     @app.get("/api/chat/messages")
     async def chat_messages(request: Request, after_id: int = 0, limit: int = 100):

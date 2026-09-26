@@ -51,6 +51,27 @@ class SocialStore:
         );
         CREATE INDEX IF NOT EXISTS idx_vip_payments_wallet ON vip_payments(wallet_address, created_at DESC);
         """)
+        # Códigos de desconto (criados manualmente no banco) + feedback/contato.
+        self.store._run_script("""
+        CREATE TABLE IF NOT EXISTS discount_codes (
+          code TEXT PRIMARY KEY, percent INTEGER NOT NULL CHECK (percent BETWEEN 5 AND 100),
+          active INTEGER NOT NULL DEFAULT 1, max_uses INTEGER, expires_at INTEGER,
+          note TEXT, created_at INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS discount_redemptions (
+          code TEXT NOT NULL, wallet_address TEXT NOT NULL, reference TEXT NOT NULL,
+          redeemed_at INTEGER NOT NULL, PRIMARY KEY (code, wallet_address)
+        );
+        CREATE TABLE IF NOT EXISTS feedback_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, wallet_address TEXT, contact TEXT,
+          body TEXT NOT NULL, created_at INTEGER NOT NULL, read_at INTEGER, client_hash TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_messages(id DESC);
+        CREATE INDEX IF NOT EXISTS idx_feedback_client ON feedback_messages(client_hash, created_at DESC)
+        """)
+        self.store._ensure_column("vip_payments", "base_amount_usdc", "REAL")
+        self.store._ensure_column("vip_payments", "discount_code", "TEXT")
+        self.store._ensure_column("vip_payments", "discount_percent", "INTEGER NOT NULL DEFAULT 0")
         self.store.db.commit()
 
     def _headers(self, prefer: str | None = None) -> dict[str, str]:
@@ -212,7 +233,8 @@ class SocialStore:
 
     # ------------------------------------------------------------ VIP payments
     _payment_fields = ("reference", "wallet_address", "memo", "amount_usdc", "created_at",
-                       "expires_at", "status", "signature", "paid_at")
+                       "expires_at", "status", "signature", "paid_at", "base_amount_usdc",
+                       "discount_code", "discount_percent")
 
     def save_payment_intent(self, intent: dict) -> None:
         row = {key: intent.get(key) for key in self._payment_fields}
@@ -265,12 +287,94 @@ class SocialStore:
         self.store.db.commit()
         return changed == 1
 
-    def extend_vip(self, address: str, seconds: int) -> dict:
+    def _local_only(self, feature: str) -> None:
+        if self.remote:
+            raise SocialUnavailable(f"{feature} exige o banco Turso/SQLite (Supabase foi descontinuado)")
+
+    # --------------------------------------------------------- discount codes
+    @staticmethod
+    def normalize_code(code: str) -> str:
+        return "".join(str(code or "").split()).upper()[:64]
+
+    def discount_code(self, code: str) -> dict | None:
+        """Row of an existing code (any state); matching is case-insensitive."""
+        self._local_only("Códigos de desconto")
+        code = self.normalize_code(code)
+        if not code:
+            return None
+        fields = ("code", "percent", "active", "max_uses", "expires_at")
+        row = self.store.db.execute(
+            f"SELECT {','.join(fields)} FROM discount_codes WHERE UPPER(code)=?", (code,)).fetchone()
+        return dict(zip(fields, row)) if row else None
+
+    def discount_uses(self, code: str) -> int:
+        row = self.store.db.execute("SELECT COUNT(*) FROM discount_redemptions WHERE code=?",
+                                    (code,)).fetchone()
+        return int(row[0] if row else 0)
+
+    def discount_used_by(self, code: str, address: str) -> bool:
+        return self.store.db.execute(
+            "SELECT 1 FROM discount_redemptions WHERE code=? AND wallet_address=?",
+            (code, address)).fetchone() is not None
+
+    def redeem_discount(self, code: str, address: str, reference: str) -> bool:
+        """Records the use; False when this wallet had already used the code."""
+        self._local_only("Códigos de desconto")
+        try:
+            self.store.db.execute("""INSERT INTO discount_redemptions
+                (code,wallet_address,reference,redeemed_at) VALUES(?,?,?,?)""",
+                (code, address, reference, int(time.time())))
+        except Exception as exc:  # sqlite3 / libsql IntegrityError
+            if "UNIQUE" in str(exc).upper() or "PRIMARY" in str(exc).upper():
+                return False
+            raise
+        self.store.db.commit()
+        return True
+
+    # ------------------------------------------------------- feedback/contact
+    _feedback_fields = ("id", "wallet_address", "contact", "body", "created_at", "read_at")
+
+    def add_feedback(self, body: str, contact: str | None, address: str | None,
+                     client_hash: str) -> dict:
+        self._local_only("Feedback")
+        body = str(body or "").strip()
+        contact = " ".join(str(contact or "").split())[:200] or None
+        if len(body) < 3 or len(body) > 2000:
+            raise ValueError("A mensagem deve ter entre 3 e 2000 caracteres")
+        now = int(time.time())
+        recent = self.store.db.execute(
+            "SELECT COUNT(*), MAX(created_at) FROM feedback_messages WHERE client_hash=? AND created_at>?",
+            (client_hash, now - 3600)).fetchone()
+        if recent and int(recent[0] or 0) >= 5:
+            raise ValueError("Limite de mensagens atingido. Tente novamente em uma hora.")
+        if recent and recent[1] and now - int(recent[1]) < 20:
+            raise ValueError("Aguarde alguns segundos antes de enviar outra mensagem")
+        self.store.db.execute("""INSERT INTO feedback_messages
+            (wallet_address,contact,body,created_at,client_hash) VALUES(?,?,?,?,?)""",
+            (address, contact, body, now, client_hash))
+        message_id = int(self.store.db.execute("SELECT last_insert_rowid()").fetchone()[0])
+        self.store.db.commit()
+        return {"id": message_id, "created_at": now}
+
+    def feedback(self, limit: int = 200) -> list[dict]:
+        self._local_only("Feedback")
+        rows = self.store.db.execute(
+            f"SELECT {','.join(self._feedback_fields)} FROM feedback_messages ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),)).fetchall()
+        return [dict(zip(self._feedback_fields, row)) for row in rows]
+
+    def mark_feedback_read(self, message_id: int, read: bool = True) -> None:
+        self._local_only("Feedback")
+        self.store.db.execute("UPDATE feedback_messages SET read_at=? WHERE id=?",
+                              (int(time.time()) if read else None, int(message_id)))
+        self.store.db.commit()
+
+    def extend_vip(self, address: str, seconds: int, provider: str = "solana_usdc") -> dict:
         now = int(time.time())
         current = self.user(address) or {}
         start = max(now, int(current.get("current_period_end") or 0))
         fields = {"plan": "vip", "subscription_status": "active",
-                  "subscription_provider": "solana_usdc", "current_period_end": start + seconds}
+                  "subscription_provider": provider, "current_period_end": start + seconds}
         if self.remote:
             rows = self._request("PATCH", "sentinel_users", params={
                 "wallet_address": f"eq.{address}"}, payload=fields, prefer="return=representation")

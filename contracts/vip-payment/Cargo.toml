@@ -1,0 +1,21 @@
+[package]
+name = "market-sentinel-vip"
+version = "0.1.0"
+edition = "2021"
+description = "Market Sentinel — pagamento VIP em USDC (programa Solana nativo mínimo)"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+no-entrypoint = []
+
+[dependencies]
+solana-program = "2.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+overflow-checks = true
+strip = true
